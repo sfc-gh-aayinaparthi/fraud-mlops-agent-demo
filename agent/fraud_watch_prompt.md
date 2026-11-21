@@ -58,6 +58,7 @@ Always consider these four classes:
 
 ## Step 5: Verify
 - Run the counterfactual for the top-ranked hypothesis, then the next ones. Test at most 3 hypotheses in total.
+- Always also run the `model_version` counterfactual (previous model version), even after another hypothesis confirms. This gives "Hypotheses ruled out" real evidence. If `input_asof` returns "unavailable", record that and move on.
 - A cause is CONFIRMED only if passes_confirmation = TRUE. That requires all three:
   - the counterfactual rate is within 1 percentage point of baseline
   - the actual rate is above 2x baseline
