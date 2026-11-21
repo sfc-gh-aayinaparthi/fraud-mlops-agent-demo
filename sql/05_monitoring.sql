@@ -60,10 +60,10 @@ ALTER TABLE SERVING.FEATURE_LOG ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.ROW_COUN
 -- (DMF bodies cannot use CURRENT_TIMESTAMP, so "null rate of newly arrived rows" is derived
 --  from consecutive NULL_COUNT / ROW_COUNT measurements in MONITORING.V_DMF_ANOMALIES)
 
--- Fraud-flag rate per 15-minute bucket vs same-hour-of-day baseline (prior 7 days)
+-- Fraud-flag rate per 5-minute bucket vs same-hour-of-day baseline (prior 7 days)
 CREATE OR REPLACE VIEW MONITORING.V_FRAUD_RATE_ANOMALY AS
 WITH b AS (
-  SELECT TIME_SLICE(txn_ts, 15, 'MINUTE') AS bucket_start, COUNT(*) AS n, AVG(is_flagged) AS flag_rate
+  SELECT TIME_SLICE(txn_ts, 5, 'MINUTE') AS bucket_start, COUNT(*) AS n, AVG(is_flagged) AS flag_rate
   FROM SERVING.PREDICTIONS
   WHERE txn_ts >= DATEADD(day, -8, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)
   GROUP BY 1
@@ -77,6 +77,6 @@ SELECT b.bucket_start, b.n, ROUND(b.flag_rate, 4) AS flag_rate,
        ROUND(base.base_rate, 4) AS baseline_rate,
        ROUND((b.flag_rate - base.base_rate) / NULLIF(base.base_sd, 0), 2) AS z_score,
        ROUND(b.n * (b.flag_rate - base.base_rate)) AS excess_flags,
-       (b.flag_rate > 2 * base.base_rate AND (b.flag_rate - base.base_rate) / NULLIF(base.base_sd, 0) > 4 AND b.n >= 100) AS is_anomaly
+       (b.flag_rate > 2 * base.base_rate AND (b.flag_rate - base.base_rate) / NULLIF(base.base_sd, 0) > 4 AND b.n >= 50) AS is_anomaly
 FROM b JOIN base ON base.hr = HOUR(b.bucket_start)
 WHERE b.bucket_start >= DATEADD(hour, -24, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ);

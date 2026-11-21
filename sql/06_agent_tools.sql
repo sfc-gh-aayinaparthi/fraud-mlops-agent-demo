@@ -64,9 +64,9 @@ FROM a, t
 WHERE a.n > 0
 $$;
 
--- 2. Feature health per 15-min bucket (served features): null % and mean per model input
+-- 2. Feature health per 5-min bucket (served features): null % and mean per model input
 CREATE OR REPLACE VIEW MONITORING.V_FEATURE_HEALTH AS
-SELECT TIME_SLICE(txn_ts, 15, 'MINUTE') AS bucket_start, COUNT(*) AS n,
+SELECT TIME_SLICE(txn_ts, 5, 'MINUTE') AS bucket_start, COUNT(*) AS n,
        ROUND(100 * COUNT_IF(cust_avg_amt_30d IS NULL) / COUNT(*), 2)      AS pct_null_cust_avg_amt_30d,
        ROUND(100 * COUNT_IF(distance_from_home_km IS NULL) / COUNT(*), 2) AS pct_null_distance_from_home_km,
        ROUND(100 * COUNT_IF(merchant_risk_score IS NULL) / COUNT(*), 2)   AS pct_null_merchant_risk_score,
