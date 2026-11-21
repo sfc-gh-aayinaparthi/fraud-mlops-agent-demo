@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FRAUD_WATCH - Autonomous MLOps Agent Demo Runbook</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 1000px; margin: 32px auto; padding: 0 20px; color: #1d2433; line-height: 1.5; }
+  h1 { color: #11567f; margin-bottom: 4px; } h2 { color: #11567f; border-bottom: 2px solid #29b5e8; padding-bottom: 4px; margin-top: 36px; }
+  h3 { margin-top: 22px; } .sub { color: #5b6b7f; margin-top: 0; }
+  code, pre { font-family: SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  pre { background: #0f1b2b; color: #e6edf3; padding: 12px 14px; border-radius: 6px; overflow-x: auto; }
+  code { background: #eef3f8; padding: 1px 5px; border-radius: 4px; } pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid #d5dde7; padding: 6px 9px; text-align: left; vertical-align: top; } th { background: #eef5fb; }
+  .say { border-left: 4px solid #29b5e8; background: #f3fafe; padding: 8px 14px; margin: 10px 0; font-style: italic; }
+  .warn { border-left: 4px solid #e8a029; background: #fff8ec; padding: 8px 14px; margin: 10px 0; }
+  .step { counter-increment: s; } ol li { margin: 4px 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } .card { border: 1px solid #d5dde7; border-radius: 6px; padding: 10px 14px; }
+</style>
+</head>
+<body>
+<h1>FRAUD_WATCH: Autonomous MLOps Agent</h1>
+<p class="sub">Westpac demo runbook. Snowflake account SFSEAPAC-AZAU_ANUDEEP, database <code>FRAUD_AUTOML_DEMO</code>, repo <a href="https://github.com/sfc-gh-aayinaparthi/fraud-mlops-agent-demo">sfc-gh-aayinaparthi/fraud-mlops-agent-demo</a></p>
+
+<h2>1. The story in one paragraph</h2>
+<p>A fraud model normally flags about 2% of card transactions. An engineer merges a sensible-looking performance refactor: read 30-day customer spend from the new customer-profile platform instead of scanning 30 days of transactions. The new table was backfilled from a 1 November snapshot, so cards issued since then have no profile. For those cards the feature goes NULL, a defensive <code>COALESCE(..., 1)</code> turns the "amount vs usual spend" ratio into roughly 50x, and the model starts declining legitimate new-card customers. About 10% of traffic is affected and the flag rate jumps from about 0.8% (daytime) to about 11%.</p>
+<p>FRAUD_WATCH, a Cortex Code cloud automation, finds the spike, works out where it is concentrated, links it to the deploy through lineage, <b>proves</b> the cause by re-scoring the window with the previous pipeline version, opens a revert PR and emails a full incident report. A human merges the PR, and the rate returns to normal.</p>
+
+<h2>2. Architecture</h2>
+<table>
+<tr><th>Schema</th><th>What lives there</th></tr>
+<tr><td><code>RAW</code></td><td>TRANSACTIONS (live, about 1,650/hr), CUSTOMERS, CARDS, MERCHANTS, CUSTOMER_PROFILE_V2 (the "new platform" table), FRAUD_LABELS (arrive 3 days late), FRAUD_GROUND_TRUTH (simulator only)</td></tr>
+<tr><td><code>FEATURES</code></td><td><code>FN_TXN_FEATURES_V1</code> / <code>_V2</code>: versioned, deterministic, replayable feature functions deployed from Git</td></tr>
+<tr><td><code>ML</code></td><td>Model Registry <code>FRAUD_XGB</code> (V0 baseline, V1 default), training set, baseline, model monitor <code>FRAUD_XGB_V1_MONITOR</code></td></tr>
+<tr><td><code>SERVING</code></td><td>FEATURE_LOG (exact features sent to the model, with DMFs attached) and PREDICTIONS (each row stamped with model_version and feature_pipeline_version)</td></tr>
+<tr><td><code>MONITORING</code></td><td>Agent tools: V_FRAUD_RATE_ANOMALY, FN_SPIKE_BREAKDOWN, V_FEATURE_HEALTH, V_DMF_RESULTS, V_RECENT_CHANGES, FEATURE_LINEAGE, COUNTERFACTUAL_RATE; plus PIPELINE_CHANGE_LOG</td></tr>
+<tr><td><code>OPS</code></td><td>Generator, deploy procedure, ACTIVE_COMPONENTS, task <code>TASK_PIPELINE_TICK</code> (every 5 min: land, featurise, score)</td></tr>
+</table>
+<p><b>Agent:</b> <code>USER$ANUDEEP.PUBLIC.COCO_ROUTINE_FRAUD_WATCH</code> (automation name <code>FRAUD_WATCH</code>). It is scheduled hourly, which is the platform minimum, and triggered on demand during the demo. It runs read-only in a Snowflake sandbox. Its only side effect is a GitHub branch and PR. The prompt is <code>agent/fraud_watch_prompt.md</code>.</p>
+
+<h2>3. Before the meeting (T-30 min)</h2>
+<pre><code>cd fraud-mlops-agent-demo
+uv run python scripts/scenario.py reset          # back to v1, clean incident data
+# confirm healthy:
+SELECT * FROM FRAUD_AUTOML_DEMO.MONITORING.V_FRAUD_RATE_ANOMALY ORDER BY bucket_start DESC LIMIT 6;
+SHOW TASKS LIKE 'TASK_PIPELINE_TICK' IN SCHEMA FRAUD_AUTOML_DEMO.OPS;   -- state = started</code></pre>
+<ul>
+<li>Open tabs: Snowsight Models, FRAUD_XGB, Monitors; the GitHub repo PR list; your inbox.</li>
+<li>Optionally run one healthy agent run: <code>cortex automation execute FRAUD_WATCH --wait</code>. It shows a "Healthy" email and that the agent doesn't cry wolf.</li>
+<li>Check GitHub is connected for Cortex Code (<code>cortex automation env</code> shows <code>git.status: ready</code>).</li>
+</ul>
+
+<h2>4. Demo flow (about 12 minutes)</h2>
+<h3>4.1 Baseline (2 min)</h3>
+<p>Show the Model Registry (two versions, metrics), the model monitor, and the predictions table with its version stamps.</p>
+<div class="say">"Every prediction is stamped with the exact code and model that produced it. That's the precondition for an agent being able to reason about cause."</div>
+
+<h3>4.2 The bad change (1 min)</h3>
+<pre><code>uv run python scripts/scenario.py inject</code></pre>
+<p>This opens and merges a real PR ("perf: use customer profile v2"), and CI deploys pipeline V2. Show the PR diff: it looks reasonable.</p>
+<div class="say">"Nothing failed. No error, no alert. The pipeline is green. This is the class of incident that takes hours to notice."</div>
+
+<h3>4.3 Let it run (about 10 min, talk over it)</h3>
+<p>Wait for 2 or more anomalous 5-minute buckets. Use the time to walk through the agent's playbook, tools and confirmation rule (section 5).</p>
+<pre><code>SELECT bucket_start, n, flag_rate, baseline_rate, z_score, is_anomaly
+FROM FRAUD_AUTOML_DEMO.MONITORING.V_FRAUD_RATE_ANOMALY ORDER BY bucket_start DESC LIMIT 6;</code></pre>
+
+<h3>4.4 The agent investigates (3-5 min)</h3>
+<pre><code>cortex automation execute FRAUD_WATCH --wait --timeout 900</code></pre>
+<p>In production this runs on its schedule. While it runs, the email and PR arrive. Walk through the email:</p>
+<ol>
+<li>Summary and impact (excess declines, cards affected)</li>
+<li>Timeline: deploy, then spike, then detected</li>
+<li>Evidence chain: spike concentrated in <code>card_cohort = ISSUED_SINCE_NOV</code>; <code>cust_avg_amt_30d</code> null % went from 0 to about 10%; the lineage path leads to CUSTOMER_PROFILE_V2; the deploy touched it</li>
+<li>Verification table: <code>pipeline_version V1</code> brings the rate back to baseline and explains more than 80% of the excess, so CONFIRMED; model V0 and input_asof are ruled out</li>
+<li>Revert PR link plus the proposed forward fix</li>
+</ol>
+<div class="say">"The agent didn't guess. It re-ran the last 20 minutes of transactions through the previous pipeline version, with the same data and the same model, and the problem disappeared. That's a controlled experiment, not a correlation."</div>
+
+<h3>4.5 Human approves (1 min)</h3>
+<pre><code># review and merge the agent's PR in GitHub, then CI redeploys main:
+uv run python scripts/scenario.py deploy-main</code></pre>
+<p>Within 5-10 minutes the anomaly view returns to baseline.</p>
+<div class="warn"><b>CI note:</b> in this demo, "CI" is the <code>deploy-main</code> command. In production, a GitHub Action (or a Snowflake Git repository plus task) runs the same deploy on merge to main.</div>
+
+<h3>4.6 Optional: "it doesn't blame the pipeline for everything" (5 min)</h3>
+<pre><code>uv run python scripts/scenario.py burst-on     # genuine gift-card fraud attack, no code change
+# wait about 10 min, then:
+cortex automation execute FRAUD_WATCH --wait --timeout 900
+uv run python scripts/scenario.py burst-off</code></pre>
+<p>Expected: an UNCONFIRMED verdict. Every revert still shows a high rate, the features are healthy, and the spike is concentrated in <code>merchant_category = GIFT_CARDS</code>. It's labelled a "possible genuine fraud event" and no PR is opened.</p>
+
+<h3>4.7 Reset</h3>
+<pre><code>uv run python scripts/scenario.py reset</code></pre>
+
+<h2>5. How the agent reasons</h2>
+<table>
+<tr><th>Step</th><th>What it does</th><th>Tool</th></tr>
+<tr><td>1 Detect</td><td>2 or more of the last 4 five-minute buckets with rate above 2x the same-hour baseline and z above 4</td><td>V_FRAUD_RATE_ANOMALY</td></tr>
+<tr><td>2 Scope</td><td>Spike start T; which segment holds the excess</td><td>FN_SPIKE_BREAKDOWN</td></tr>
+<tr><td>3 Evidence</td><td>Feature null % and shifts, DMF results, every change near T, lineage of suspect features, model monitor drift</td><td>V_FEATURE_HEALTH, V_DMF_RESULTS, V_RECENT_CHANGES, FEATURE_LINEAGE, MODEL_MONITOR_DRIFT_METRIC</td></tr>
+<tr><td>4 Hypotheses</td><td>Pipeline change, model change, upstream data change, genuine shift; ranked by timing, lineage and segment match</td><td>reasoning</td></tr>
+<tr><td>5 Verify</td><td>Revert one component, hold the rest fixed, re-score. CONFIRMED only if the counterfactual is within 1pp of baseline, actual is above 2x baseline, and it explains at least 80% of the excess</td><td>COUNTERFACTUAL_RATE</td></tr>
+<tr><td>6 Remediate</td><td>Revert PR, labelled <code>fraud-watch</code> and de-duplicated; never merges</td><td>git / gh</td></tr>
+<tr><td>7 Report</td><td>A fixed 7-section email and a machine-readable status line</td><td>run report email</td></tr>
+</table>
+
+<h3>Counterfactual types</h3>
+<table>
+<tr><th>revert_type</th><th>Tests</th><th>How</th></tr>
+<tr><td><code>pipeline_version</code></td><td>Feature code change</td><td>Rebuilds features with the logged SQL of an earlier version (deterministic, as-of replay)</td></tr>
+<tr><td><code>model_version</code></td><td>Model promotion</td><td>Scores the served features with another Model Registry version</td></tr>
+<tr><td><code>input_asof</code></td><td>Upstream data change with no deploy</td><td>Same code, dimension tables via Time Travel at an earlier timestamp</td></tr>
+<tr><td><code>feature_ablation</code></td><td>Sensitivity only</td><td>One feature replaced with its 7-day median; can never confirm a cause</td></tr>
+</table>
+
+<h2>6. How this works in production (not a staged incident)</h2>
+<p>The demo plants one cause, but nothing in the agent is specific to it. The tools are generic, and the agent has to find the cause the same way it would in real life.</p>
+<h3>Prerequisites (platform hygiene, more important than the agent)</h3>
+<ul>
+<li><b>Version everything:</b> pipeline code in Git and deployed by CI, with every deploy logged with its SQL and commit; models in the Model Registry; every prediction stamped with model and pipeline version.</li>
+<li><b>Replayable features:</b> feature logic is a deterministic function of an as-of window. No <code>CURRENT_TIMESTAMP()</code>, sampling or external calls in the feature path.</li>
+<li><b>Point-in-time inputs:</b> Time Travel retention that covers the investigation window (7 days here; up to 90 on Enterprise), or scheduled snapshots for longer windows.</li>
+<li><b>Feature log:</b> persist exactly what the model saw, and attach DMFs to it.</li>
+<li><b>Lineage:</b> a mapping from each model input to its source columns and owners (Feature Store / Horizon lineage, or a curated catalog).</li>
+</ul>
+<h3>Detection versus investigation</h3>
+<p>Detection stays deterministic and cheap: anomaly views, DMF expectations, model monitors and alerts. The LLM agent only starts reasoning when a signal fires. That keeps cost predictable and makes detection auditable.</p>
+<h3>Most real incidents have no deploy</h3>
+<p>Upstream systems start sending NULLs, a partner feed is late, a new MCC code appears, or customer behaviour shifts. The same loop covers these: <code>input_asof</code> tests "was it the data?", and the "all reverts fail and the features are healthy" branch catches genuine shifts rather than blaming code.</p>
+<h3>Honest limits</h3>
+<ul>
+<li><b>Labels are late:</b> for fraud, the early signal is prediction shape, not accuracy. The agent can prove a change <i>caused the shift</i> before anyone knows whether the predictions were wrong.</li>
+<li><b>Concurrent changes:</b> two changes in the window need combination tests, or the agent reports the result as ambiguous.</li>
+<li><b>Retention and determinism:</b> if inputs can't be reconstructed, the counterfactual can't run, and the agent must say so.</li>
+<li><b>Autonomy boundary:</b> the agent is read-only in Snowflake; remediation is a PR that a human merges. That boundary is what makes it acceptable in a regulated bank.</li>
+</ul>
+
+<h2>7. Reference</h2>
+<table>
+<tr><th>Item</th><th>Location</th></tr>
+<tr><td>Feature pipeline</td><td><code>pipeline/features/features_txn.sql</code></td></tr>
+<tr><td>Agent prompt</td><td><code>agent/fraud_watch_prompt.md</code> (update with <code>cortex automation update FRAUD_WATCH --prompt-file ...</code>)</td></tr>
+<tr><td>Agent tools</td><td><code>sql/06_agent_tools.sql</code></td></tr>
+<tr><td>Monitoring</td><td><code>sql/05_monitoring.sql</code></td></tr>
+<tr><td>Scenarios</td><td><code>scripts/scenario.py</code> (inject, deploy-main, burst-on/off, reset)</td></tr>
+<tr><td>Agent run history</td><td><code>cortex automation doctor FRAUD_WATCH</code></td></tr>
+<tr><td>Cost</td><td>FRAUD_WH XS runs the 5-minute tick. Suspend the tick task when not demoing: <code>ALTER TASK FRAUD_AUTOML_DEMO.OPS.TASK_PIPELINE_TICK SUSPEND;</code></td></tr>
+</table>
+</body>
+</html>
