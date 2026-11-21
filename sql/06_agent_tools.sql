@@ -203,7 +203,7 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
         body = bind_window(pipeline_body(session, active_fp), s, e)
         for t in DIM_TABLES:
             body = re.sub(rf"{DB}\.RAW\.{t}\b",
-                          f"{DB}.RAW.{t} AT(TIMESTAMP => '{revert_value}'::TIMESTAMP_NTZ)", body)
+                          f"{DB}.RAW.{t} AT(TIMESTAMP => '{revert_value}'::TIMESTAMP_LTZ)", body)
         n, cf, coh = score(session, body, active_mv)
         note = (f"active pipeline {active_fp}, dimension tables {','.join(DIM_TABLES)} as of {revert_value} "
                 "(Time Travel); transactions unchanged")

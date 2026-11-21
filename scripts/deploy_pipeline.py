@@ -31,7 +31,7 @@ def main() -> None:
     except subprocess.CalledProcessError:
         sha, author, message = "uncommitted", os.getenv("USER", "unknown"), "manual deploy"
 
-    conn = snowflake.connector.connect(connection_name=a.connection)
+    conn = snowflake.connector.connect(connection_name=a.connection, client_store_temporary_credential=True)
     cur = conn.cursor()
     cur.execute("USE DATABASE FRAUD_AUTOML_DEMO")
     cur.execute("USE WAREHOUSE FRAUD_WH")
