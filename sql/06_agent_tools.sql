@@ -204,9 +204,14 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
         for t in DIM_TABLES:
             body = re.sub(rf"{DB}\.RAW\.{t}\b",
                           f"{DB}.RAW.{t} AT(TIMESTAMP => '{revert_value}'::TIMESTAMP_LTZ)", body)
-        n, cf, coh = score(session, body, active_mv)
-        note = (f"active pipeline {active_fp}, dimension tables {','.join(DIM_TABLES)} as of {revert_value} "
-                "(Time Travel); transactions unchanged")
+        try:
+            n, cf, coh = score(session, body, active_mv)
+        except Exception as ex:  # e.g. timestamp before table creation / outside retention
+            n, cf, coh = None, None, {}
+            note = f"input_asof unavailable: {str(ex)[:160]}"
+        if cf is not None:
+            note = (f"active pipeline {active_fp}, dimension tables {','.join(DIM_TABLES)} as of {revert_value} "
+                    "(Time Travel); transactions unchanged")
     elif revert_type == "feature_ablation":
         feat = (revert_value or "").lower()
         if feat not in ARGS["V1"]:

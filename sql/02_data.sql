@@ -100,7 +100,9 @@ BEGIN
   ), c AS (
     SELECT g.*,
            IFF(u_card < 0.33, new_card, legacy_card) AS card_id,
-           (u_fraud < :FRAUD_RATE) AS is_fraud_base,
+           -- live mode keeps history's hour-of-day profile (60% of fraud in 00:00-04:59)
+           (u_fraud < IFF(:NIGHT_SHIFT, :FRAUD_RATE,
+                          IFF(HOUR(ts0) BETWEEN 0 AND 4, :FRAUD_RATE * 3.28, :FRAUD_RATE * 0.4))) AS is_fraud_base,
            (:BURST_CATEGORY IS NOT NULL AND u_burst < :BURST_RATE) AS is_burst
     FROM g
   )
