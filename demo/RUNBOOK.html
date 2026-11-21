@@ -36,10 +36,14 @@
 <tr><td><code>MONITORING</code></td><td>Agent tools: V_FRAUD_RATE_ANOMALY, FN_SPIKE_BREAKDOWN, V_FEATURE_HEALTH, V_DMF_RESULTS, V_RECENT_CHANGES, FEATURE_LINEAGE, COUNTERFACTUAL_RATE; plus PIPELINE_CHANGE_LOG</td></tr>
 <tr><td><code>OPS</code></td><td>Generator, deploy procedure, ACTIVE_COMPONENTS, task <code>TASK_PIPELINE_TICK</code> (every 5 min: land, featurise, score)</td></tr>
 </table>
-<p><b>Agent:</b> <code>USER$ANUDEEP.PUBLIC.COCO_ROUTINE_FRAUD_WATCH</code> (automation name <code>FRAUD_WATCH</code>). It is scheduled hourly, which is the platform minimum, and triggered on demand during the demo. It runs read-only in a Snowflake sandbox. Its only side effect is a GitHub branch and PR. The prompt is <code>agent/fraud_watch_prompt.md</code>.</p>
+<p><b>Agent:</b> <code>USER$ANUDEEP.PUBLIC.COCO_ROUTINE_FRAUD_WATCH</code> (automation name <code>FRAUD_WATCH</code>). It is scheduled hourly, which is the platform minimum, and triggered on demand during the demo. Its only side effect is a GitHub branch and PR. The prompt is <code>agent/fraud_watch_prompt.md</code>.</p>
+<p><b>Guardrail:</b> the automation runs under the restricted session scope <code>FRAUD_AUTOML_DEMO.OPS.FRAUD_WATCH_SCOPE</code>. It extends the built-in read-only <code>SNOWFLAKE$DATA_READ_WITH_AI</code> with USAGE on exactly one procedure, <code>MONITORING.COUNTERFACTUAL_RATE</code>. The built-in read-only scope excludes all stored procedures, so this is the narrowest allow-list that still lets the agent run its verification. The agent can't write to Snowflake even though it runs as an ACCOUNTADMIN user.</p>
 
 <h2>3. Before the meeting (T-30 min)</h2>
 <pre><code>cd fraud-mlops-agent-demo
+-- resume the live pipeline and the model monitor (suspended between demos to save credits)
+ALTER TASK FRAUD_AUTOML_DEMO.OPS.TASK_PIPELINE_TICK RESUME;
+ALTER MODEL MONITOR FRAUD_AUTOML_DEMO.ML.FRAUD_XGB_V1_MONITOR RESUME;
 uv run python scripts/scenario.py reset          # back to v1, clean incident data
 # confirm healthy:
 SELECT * FROM FRAUD_AUTOML_DEMO.MONITORING.V_FRAUD_RATE_ANOMALY ORDER BY bucket_start DESC LIMIT 6;
@@ -47,7 +51,7 @@ SHOW TASKS LIKE 'TASK_PIPELINE_TICK' IN SCHEMA FRAUD_AUTOML_DEMO.OPS;   -- state
 <ul>
 <li>Open tabs: Snowsight Models, FRAUD_XGB, Monitors; the GitHub repo PR list; your inbox.</li>
 <li>Optionally run one healthy agent run: <code>cortex automation execute FRAUD_WATCH --wait</code>. It shows a "Healthy" email and that the agent doesn't cry wolf.</li>
-<li>Check GitHub is connected for Cortex Code (<code>cortex automation env</code> shows <code>git.status: ready</code>).</li>
+<li>Check GitHub is connected for Cortex Code (<code>cortex automation env</code> shows <code>git.status: ready</code>). Without it the agent still confirms the cause and emails the report, but can't open the revert PR.</li>
 </ul>
 
 <h2>4. Demo flow (about 12 minutes)</h2>
@@ -91,7 +95,19 @@ uv run python scripts/scenario.py burst-off</code></pre>
 <p>Expected: an UNCONFIRMED verdict. Every revert still shows a high rate, the features are healthy, and the spike is concentrated in <code>merchant_category = GIFT_CARDS</code>. It's labelled a "possible genuine fraud event" and no PR is opened.</p>
 
 <h3>4.7 Reset</h3>
-<pre><code>uv run python scripts/scenario.py reset</code></pre>
+<pre><code>uv run python scripts/scenario.py reset
+ALTER TASK FRAUD_AUTOML_DEMO.OPS.TASK_PIPELINE_TICK SUSPEND;
+ALTER MODEL MONITOR FRAUD_AUTOML_DEMO.ML.FRAUD_XGB_V1_MONITOR SUSPEND;</code></pre>
+
+<h3>Dry-run results (21 Nov 2026)</h3>
+<table>
+<tr><th>Scenario</th><th>Agent verdict</th><th>Key numbers</th></tr>
+<tr><td>Healthy</td><td>Healthy, no counterfactuals</td><td>-</td></tr>
+<tr><td>Pipeline V2 incident</td><td>CONFIRMED, pipeline V2</td><td>Actual 13.6% vs baseline 0.87%; revert to V1 gives 0.4%, explaining 104% of the excess. Spike concentrated in cards issued since Nov (88% flag rate, 93% of excess)</td></tr>
+<tr><td>Model-version revert</td><td>Ruled out</td><td>Model V0 on the same features: rate unchanged (13.8%)</td></tr>
+<tr><td>Genuine gift-card attack</td><td>UNCONFIRMED, no PR</td><td>Pipeline, input_asof and model reverts all fail; 96% of excess in GIFT_CARDS</td></tr>
+</table>
+<p>Time to detect: the first anomalous 5-minute bucket closes about 5-10 minutes after the deploy. Each agent run takes about 3-5 minutes.</p>
 
 <h2>5. How the agent reasons</h2>
 <table>
