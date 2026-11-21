@@ -80,7 +80,10 @@ def inject():
     sh("git", "pull", "--ff-only")
     branch = "feature/customer-profile-v2"
     sh("git", "checkout", "-B", branch)
-    open(FILE, "w").write(v2_source(open(FILE).read()))
+    with open(FILE) as f:
+        new_src = v2_source(f.read())
+    with open(FILE, "w") as f:
+        f.write(new_src)
     sh("git", *AUTHOR, "commit", "-am",
        "perf(features): source 30d customer spend from CUSTOMER_PROFILE_V2 instead of window scan")
     sh("git", "push", "-f", "-u", "origin", branch)
