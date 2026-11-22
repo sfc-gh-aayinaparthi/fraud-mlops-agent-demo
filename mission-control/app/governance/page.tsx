@@ -130,15 +130,19 @@ export default function GovernancePage() {
                 <tr><th className="pb-2 font-medium">When</th><th className="pb-2 font-medium">Who</th><th className="pb-2 font-medium">Action</th><th className="pb-2 font-medium">Target</th><th className="pb-2 font-medium">Outcome</th></tr>
               </thead>
               <tbody>
-                {data.log.map((l) => (
+                {data.log.map((l) => {
+                  const t = l.target;
+                  const target = t && typeof t === 'object' ? (t.pr_number ? `PR #${t.pr_number}` : JSON.stringify(t)) : String(t ?? '—');
+                  return (
                   <tr key={l.log_id} className="border-t border-border/60 align-top">
                     <td className="tabular whitespace-nowrap py-2 pr-3">{dayTime(l.ts)}</td>
                     <td className="py-2 pr-3">{l.actor}</td>
                     <td className="py-2 pr-3 font-mono text-xs">{l.action}</td>
-                    <td className="max-w-[18rem] truncate py-2 pr-3 text-xs text-muted-foreground" title={l.target}>{l.target}</td>
+                    <td className="max-w-[18rem] truncate py-2 pr-3 text-xs text-muted-foreground" title={target}>{target}</td>
                     <td className="py-2"><span className={cn('rounded px-1.5 py-0.5 text-xs', l.outcome === 'failed' ? 'bg-critical/15 text-critical' : 'bg-muted')}>{l.outcome}</span></td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
