@@ -123,6 +123,7 @@ def window_sql(src, s, e):
     return src.replace(":START", f"'{s}'::TIMESTAMP_NTZ").replace(":END", f"'{e}'::TIMESTAMP_NTZ")
 
 def run(session, lookback_minutes):
+    session.sql("USE SCHEMA MLOPS_CONTROL.CORE").collect()   # temp staging table needs a current schema
     now = session.sql("SELECT CURRENT_TIMESTAMP()::TIMESTAMP_NTZ").collect()[0][0]
     start = now - dt.timedelta(minutes=int(lookback_minutes))
     metrics = session.sql("SELECT * FROM MLOPS_CONTROL.CORE.METRIC_CATALOG WHERE enabled").collect()
@@ -345,30 +346,32 @@ def run(session, entity, start_ts, end_ts):
             f"tot AS (SELECT SUM(IFF(in_w, outcome, 0)) - COUNT_IF(in_w) * AVG(IFF(NOT in_w, outcome, NULL)) AS ex FROM l) ")
     unions = " UNION ALL ".join(
         f"SELECT '{d}' AS dimension, {d}::STRING AS dim_value, in_w, outcome FROM l" for d in dims)
-    q = (base + f", u AS ({unions}) "
+    q = (base + f", u AS ({unions}), g AS ("
          "SELECT dimension, dim_value, COUNT_IF(in_w) n, AVG(IFF(in_w, outcome, NULL)) rate, "
-         "AVG(IFF(NOT in_w, outcome, NULL)) baseline_rate, "
-         "COUNT_IF(in_w) * (AVG(IFF(in_w, outcome, NULL)) - COALESCE(AVG(IFF(NOT in_w, outcome, NULL)),0)) excess, "
-         "COUNT_IF(in_w) * (AVG(IFF(in_w, outcome, NULL)) - COALESCE(AVG(IFF(NOT in_w, outcome, NULL)),0)) / NULLIF((SELECT ex FROM tot),0) share "
-         "FROM u GROUP BY 1,2 HAVING COUNT_IF(in_w) > 0 ORDER BY excess DESC")
+         "AVG(IFF(NOT in_w, outcome, NULL)) baseline_rate FROM u GROUP BY 1,2 HAVING COUNT_IF(in_w) > 0) "
+         "SELECT dimension::STRING, dim_value::STRING, n::NUMBER, rate::FLOAT, baseline_rate::FLOAT, "
+         "(n * (rate - COALESCE(baseline_rate, 0)))::FLOAT AS excess, "
+         "(n * (rate - COALESCE(baseline_rate, 0)) / NULLIF((SELECT ex FROM tot), 0))::FLOAT AS share_of_excess "
+         "FROM g ORDER BY excess DESC")
     return session.sql(q)
 $$;
 
 ---------------------------------------------------------------------------- read views
 CREATE OR REPLACE VIEW V_ENTITY_HEALTH AS
+-- health = each metric's LATEST reading (not "anything abnormal recently")
 WITH latest AS (
   SELECT entity_id, metric_id, value, expected, expected_low, expected_high, is_abnormal, severity, ts
   FROM SIGNALS
   WHERE ts >= DATEADD(hour, -3, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)
   QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY ts DESC) = 1
 ), recent AS (
-  SELECT entity_id, COUNT_IF(is_abnormal) AS abnormal_30m, MAX(IFF(is_abnormal, severity, 0)) AS max_sev
-  FROM SIGNALS WHERE ts >= DATEADD(minute, -30, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ) GROUP BY 1
+  SELECT entity_id, COUNT_IF(is_abnormal) AS abnormal_now, MAX(IFF(is_abnormal, severity, 0)) AS max_sev
+  FROM latest WHERE ts >= DATEADD(minute, -30, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ) GROUP BY 1
 )
 SELECT e.system_id, e.entity_id, e.entity_type, e.name, e.fqn, e.stage, e.owner,
-       COALESCE(r.abnormal_30m, 0) AS abnormal_30m, COALESCE(r.max_sev, 0) AS max_severity,
+       COALESCE(r.abnormal_now, 0) AS abnormal_now, COALESCE(r.max_sev, 0) AS max_severity,
        CASE WHEN COALESCE(r.max_sev, 0) >= 3 THEN 'critical'
-            WHEN COALESCE(r.abnormal_30m, 0) > 0 THEN 'warning'
+            WHEN COALESCE(r.abnormal_now, 0) > 0 THEN 'warning'
             WHEN (SELECT COUNT(*) FROM METRIC_CATALOG m WHERE m.entity_id = e.entity_id AND m.enabled) = 0 THEN 'unmonitored'
             ELSE 'healthy' END AS status,
        (SELECT ARRAY_AGG(OBJECT_CONSTRUCT('metric_id', l.metric_id, 'value', l.value, 'expected', l.expected,

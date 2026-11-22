@@ -1,0 +1,194 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * "Night control tower": near-black blue room, phosphor-teal for healthy flow,
+ * amber/coral only for state, violet reserved for the agent. Light mode is a
+ * cool paper variant for daytime reviews.
+ */
+@layer base {
+  :root {
+    --brand: #0f9d86;
+    --agent: #6d4fd8;
+    --background: #f3f5f4;
+    --foreground: #101820;
+    --card: #ffffff;
+    --card-foreground: #101820;
+    --popover: #ffffff;
+    --popover-foreground: #101820;
+    --primary: #0f7f6d;
+    --primary-foreground: #ffffff;
+    --secondary: #e7ece9;
+    --secondary-foreground: #101820;
+    --muted: #eaefec;
+    --muted-foreground: #55616c;
+    --accent: #e2e9e6;
+    --accent-foreground: #101820;
+    --destructive: #c8243f;
+    --destructive-foreground: #ffffff;
+    --border: #d6ddd9;
+    --input: #c9d2cd;
+    --ring: #0f7f6d;
+    --radius: 0.6rem;
+    --success: #12805f;
+    --warning: #a85d00;
+    --critical: #c8243f;
+    --chart-1: var(--brand);
+    --chart-2: #6d4fd8;
+    --chart-3: #c27a0e;
+    --chart-4: #2b6cb0;
+    --chart-5: #c8243f;
+    --chart-grid: #e1e6e3;
+    --chart-axis: #66727c;
+    --twin-bg: #e9eeeb;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  --color-agent: var(--agent);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-brand: var(--brand);
+  --color-twin: var(--twin-bg);
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk Variable', 'IBM Plex Sans', ui-sans-serif, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  .dark {
+    --brand: #3ee6c4;
+    --agent: #a78bfa;
+    --background: #0a0f14;
+    --foreground: #e6edf0;
+    --card: #10171e;
+    --card-foreground: #e6edf0;
+    --popover: #131c24;
+    --popover-foreground: #e6edf0;
+    --primary: #3ee6c4;
+    --primary-foreground: #04110e;
+    --secondary: #16212a;
+    --secondary-foreground: #e6edf0;
+    --muted: #121b23;
+    --muted-foreground: #8c9ba6;
+    --accent: #1a2630;
+    --accent-foreground: #e6edf0;
+    --destructive: #ff5470;
+    --destructive-foreground: #0a0f14;
+    --border: #1e2a34;
+    --input: #26343f;
+    --ring: #3ee6c4;
+    --success: #3ee6c4;
+    --warning: #ffb547;
+    --critical: #ff5470;
+    --chart-2: #a78bfa;
+    --chart-3: #ffb547;
+    --chart-4: #5aa9ff;
+    --chart-5: #ff5470;
+    --chart-grid: #17222b;
+    --chart-axis: #7d8c97;
+    --twin-bg: #070b0f;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Faint control-room grid behind focal panels */
+@utility grid-texture {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--foreground) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--foreground) 5%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--critical) 55%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+@utility animate-rise {
+  animation: rise 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@utility animate-grow-x {
+  animation: grow-x 800ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transform-origin: left;
+}
+@utility animate-pulse-ring {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-grow-x,
+  .animate-pulse-ring {
+    animation: none;
+  }
+}
