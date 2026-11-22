@@ -44,11 +44,10 @@ def deployed_version_on_main():
 
 
 def deploy_main():
+    """CD: deploy whatever is on main, via the generic control-plane hook."""
     sh("git", "checkout", "main")
     sh("git", "pull", "--ff-only")
-    v = deployed_version_on_main()
-    print(subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "deploy_pipeline.py"), v],
-                         cwd=ROOT, check=True, text=True, capture_output=True).stdout)
+    print(sql("CALL MLOPS_CONTROL.CORE.DEPLOY_FROM_GIT('fraud.feat.txn_features', FALSE)")[0][0])
 
 
 def v2_source(src: str) -> str:
