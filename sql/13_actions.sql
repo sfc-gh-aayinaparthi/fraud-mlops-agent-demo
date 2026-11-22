@@ -62,7 +62,7 @@ def run(session, proposal_id, decision, note):
     if not rows:
         return {"ok": False, "error": "unknown proposal"}
     p = rows[0]
-    if p["STATUS"] not in ("awaiting_approval", "auto"):
+    if p["STATUS"] not in ("awaiting_approval", "auto", "failed"):   # failed may be retried
         return {"ok": False, "error": f"proposal already {p['STATUS']}"}
     params = json.loads(p["PARAMS"]) if p["PARAMS"] else {}
     atype = p["ACTION_TYPE"]
@@ -174,4 +174,5 @@ GRANT USAGE ON PROCEDURE SET_HUMAN_VERDICT(STRING, STRING, STRING) TO ROLE MLOPS
 GRANT USAGE ON PROCEDURE RUN_AGENT(STRING, STRING) TO ROLE MLOPS_APPROVER;
 GRANT USAGE ON PROCEDURE REFRESH_AGENT_EVENTS() TO ROLE MLOPS_UI_RO;
 GRANT ROLE MLOPS_UI_RO TO ROLE MLOPS_APPROVER;
+GRANT INSERT ON TABLE ACTION_LOG TO ROLE MLOPS_APPROVER;   -- RUN_AGENT is caller's rights
 GRANT ROLE MLOPS_APPROVER TO USER ANUDEEP;

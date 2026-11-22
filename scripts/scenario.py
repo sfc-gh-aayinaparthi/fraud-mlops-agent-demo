@@ -83,7 +83,8 @@ def inject():
         new_src = v2_source(f.read())
     with open(FILE, "w") as f:
         f.write(new_src)
-    sh("git", *AUTHOR, "commit", "-am",
+    # commit only the pipeline file, so unrelated local edits never ride along (or get reverted)
+    sh("git", *AUTHOR, "commit", FILE, "-m",
        "perf(features): source 30d customer spend from CUSTOMER_PROFILE_V2 instead of window scan")
     sh("git", "push", "-f", "-u", "origin", branch)
     url = sh("gh", "pr", "create", "--repo", REPO, "--base", "main", "--head", branch,

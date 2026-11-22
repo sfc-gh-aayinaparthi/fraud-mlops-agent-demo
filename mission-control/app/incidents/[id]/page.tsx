@@ -63,8 +63,9 @@ export default function IncidentPage() {
     ...data.proposals.filter((p) => p.decided_at && p.status === 'executed').map((p) => ({ ts: p.decided_at, label: 'approved', tone: 'action' as const })),
   ];
   const leadMetric = lead && metric(lead.metric_id);
+  const proof = data.experiments.find((x) => x.pass);
   const headline = inc.agent_verdict === 'confirmed' && inc.agent_cause
-    ? inc.agent_cause
+    ? `Agent confirmed the cause: ${String(inc.agent_cause).replace(/[_:]/g, ' ')}${proof ? `. Reverting it explains ${Number(proof.explained_pct).toFixed(0)}% of the excess` : ''}`
     : leadMetric && peak
       ? `${leadMetric.name} reached ${fmtMetric(peak.value, leadMetric.unit)} against an expected ${fmtMetric(peak.expected ?? peak.expected_high, leadMetric.unit)}`
       : `Abnormal ${data.signals.length} signal${data.signals.length === 1 ? '' : 's'} in ${inc.system_name}`;

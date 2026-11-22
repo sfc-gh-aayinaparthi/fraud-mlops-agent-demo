@@ -278,7 +278,8 @@ BEGIN
          MIN(s.ts), MAX(s.ts), MAX(s.severity), ARRAY_AGG(DISTINCT s.entity_id)
   FROM MLOPS_CONTROL.CORE.SIGNALS s
   JOIN MLOPS_CONTROL.CORE.METRIC_CATALOG m ON m.metric_id = s.metric_id
-  WHERE s.is_abnormal AND s.ts >= DATEADD(hour, -6, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)
+  -- only recent signals start an incident; stale stragglers never back-date one
+  WHERE s.is_abnormal AND s.ts >= DATEADD(minute, -:GAP_MINUTES, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ)
     AND NOT EXISTS (SELECT 1 FROM MLOPS_CONTROL.CORE.INCIDENT_SIGNALS x
                     WHERE x.metric_id = s.metric_id AND x.ts = s.ts)
   GROUP BY s.system_id;

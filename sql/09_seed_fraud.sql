@@ -74,7 +74,7 @@ SELECT column1, 'fraud', column2, column3, column4, column5, column6, column7, c
   'SELECT TIME_SLICE(txn_ts, 5, ''MINUTE'') ts, AVG(merchant_risk_score) v, COUNT(*) n FROM FRAUD_AUTOML_DEMO.SERVING.FEATURE_LOG WHERE txn_ts >= :START AND txn_ts < :END GROUP BY 1',
   'same_hour_baseline', '{"k":5,"min_ratio":1.5,"min_n":50}', 'both', 'Distribution shift of an input feature'),
  ('fraud.serve.task_failures', 'fraud.serve.scoring', 'Pipeline task failures', 'count', 'reliability', 'event',
-  'SELECT completed_time::TIMESTAMP_NTZ, 1, LEFT(error_message, 300) FROM TABLE(FRAUD_AUTOML_DEMO.INFORMATION_SCHEMA.TASK_HISTORY(SCHEDULED_TIME_RANGE_START => DATEADD(hour,-6,CURRENT_TIMESTAMP()), ERROR_ONLY => TRUE)) WHERE completed_time::TIMESTAMP_NTZ >= :START AND completed_time::TIMESTAMP_NTZ < :END',
+  'SELECT completed_time::TIMESTAMP_NTZ, 1, LEFT(error_message, 300) FROM TABLE(FRAUD_AUTOML_DEMO.INFORMATION_SCHEMA.TASK_HISTORY(SCHEDULED_TIME_RANGE_START => DATEADD(hour,-6,CURRENT_TIMESTAMP()), ERROR_ONLY => TRUE)) WHERE database_name = ''FRAUD_AUTOML_DEMO'' AND completed_time::TIMESTAMP_NTZ >= :START AND completed_time::TIMESTAMP_NTZ < :END',
   NULL, '{"severity":5}', 'high', 'Failed runs of the pipeline task');
 
 -- Change feeds

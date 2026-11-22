@@ -33,5 +33,5 @@ SELECT column1, 'mlops', column2, column3, column4, column5, column6, column7, c
   'SELECT TIME_SLICE(evaluated_at, 5, ''MINUTE'') ts, COUNT(*) v, COUNT(*) n FROM MLOPS_CONTROL.CORE.SIGNALS WHERE system_id <> ''mlops'' AND evaluated_at >= :START AND evaluated_at < :END GROUP BY 1',
   'static', '{"low":1}', 'low', 'Signal rows upserted per 5 minutes'),
  ('mlops.task.failures', 'mlops.task.evaluate', 'Control-plane task failures', 'count', 'reliability', 'event',
-  'SELECT completed_time::TIMESTAMP_NTZ, 1, name || '': '' || LEFT(error_message, 250) FROM TABLE(MLOPS_CONTROL.INFORMATION_SCHEMA.TASK_HISTORY(SCHEDULED_TIME_RANGE_START => DATEADD(hour,-6,CURRENT_TIMESTAMP()), ERROR_ONLY => TRUE)) WHERE completed_time::TIMESTAMP_NTZ >= :START AND completed_time::TIMESTAMP_NTZ < :END',
+  'SELECT completed_time::TIMESTAMP_NTZ, 1, name || '': '' || LEFT(error_message, 250) FROM TABLE(MLOPS_CONTROL.INFORMATION_SCHEMA.TASK_HISTORY(SCHEDULED_TIME_RANGE_START => DATEADD(hour,-6,CURRENT_TIMESTAMP()), ERROR_ONLY => TRUE)) WHERE database_name = ''MLOPS_CONTROL'' AND completed_time::TIMESTAMP_NTZ >= :START AND completed_time::TIMESTAMP_NTZ < :END',
   NULL, '{"severity":4}', 'high', 'Failed runs of control-plane tasks');
