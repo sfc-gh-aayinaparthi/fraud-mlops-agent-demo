@@ -2,7 +2,7 @@
 -- Deterministic and replayable: features for transactions in [START_TS, END_TS)
 -- depend only on RAW data with txn_ts < END_TS (30-day lookback).
 -- Deployed as FEATURES.FN_TXN_FEATURES_<VERSION> by OPS.DEPLOY_FEATURE_PIPELINE.
--- VERSION: v1
+-- VERSION: v2
 CREATE OR REPLACE FUNCTION FRAUD_AUTOML_DEMO.FEATURES.FN_TXN_FEATURES___VERSION__(START_TS TIMESTAMP_NTZ, END_TS TIMESTAMP_NTZ)
 RETURNS TABLE (
   txn_id STRING, card_id NUMBER, customer_id NUMBER, merchant_id NUMBER, txn_ts TIMESTAMP_NTZ,
@@ -20,8 +20,6 @@ WITH hist AS (
 ),
 w AS (
   SELECT h.*,
-    AVG(h.amount) OVER (PARTITION BY h.customer_id ORDER BY h.txn_ts
-        RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW) AS cust_avg_amt_30d,
     COUNT(*) OVER (PARTITION BY h.card_id ORDER BY h.txn_ts
         RANGE BETWEEN INTERVAL '1 hour' PRECEDING AND CURRENT ROW) AS txn_count_1h,
     COUNT(*) OVER (PARTITION BY h.card_id ORDER BY h.txn_ts
@@ -31,8 +29,8 @@ w AS (
 )
 SELECT w.txn_id, w.card_id, w.customer_id, w.merchant_id, w.txn_ts,
        w.amount::FLOAT AS amount,
-       w.cust_avg_amt_30d::FLOAT AS cust_avg_amt_30d,
-       (w.amount / COALESCE(w.cust_avg_amt_30d, 1))::FLOAT AS amt_to_cust_avg_30d,
+       p.avg_amt_30d::FLOAT AS cust_avg_amt_30d,
+       (w.amount / COALESCE(p.avg_amt_30d, 1))::FLOAT AS amt_to_cust_avg_30d,
        w.txn_count_1h, w.txn_count_24h,
        HAVERSINE(cu.home_lat, cu.home_lon, m.merch_lat, m.merch_lon)::FLOAT AS distance_from_home_km,
        m.merchant_risk_score::FLOAT AS merchant_risk_score,
@@ -44,5 +42,7 @@ FROM w
 JOIN FRAUD_AUTOML_DEMO.RAW.CUSTOMERS cu ON cu.customer_id = w.customer_id
 JOIN FRAUD_AUTOML_DEMO.RAW.MERCHANTS m ON m.merchant_id = w.merchant_id
 JOIN FRAUD_AUTOML_DEMO.RAW.CARDS cd ON cd.card_id = w.card_id
+-- perf: use precomputed spend profile from the new customer-profile platform
+LEFT JOIN FRAUD_AUTOML_DEMO.RAW.CUSTOMER_PROFILE_V2 p ON p.card_id = w.card_id
 WHERE w.txn_ts >= START_TS AND w.txn_ts < END_TS
 $$;
