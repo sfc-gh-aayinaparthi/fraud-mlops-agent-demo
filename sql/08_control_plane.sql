@@ -439,6 +439,7 @@ MERGE INTO ACTION_TYPES t USING (SELECT * FROM VALUES
   ('merge_pr',             'Merge a pull request; CD deploys main',        'github_merge_pr',  TRUE,  'MLOPS_APPROVER', 'revert commit'),
   ('close_pr',             'Reject a proposed pull request',               'github_close_pr',  TRUE,  'MLOPS_APPROVER', 're-open PR'),
   ('rollback_model_default','Set model default version to a prior version', 'sql_procedure',   TRUE,  'MLOPS_APPROVER', 'set default back'),
+  ('set_feature_set',       'Switch the live feature set to a registered prior version', 'sql_procedure', TRUE, 'MLOPS_APPROVER', 'activate the previous set again'),
   ('suspend_task',         'Suspend a pipeline task',                      'sql_procedure',    TRUE,  'MLOPS_APPROVER', 'resume task'),
   ('escalate',             'Escalate to on-call with findings',            'escalate',         FALSE, NULL,             'n/a')
   AS v(action_type, description, executor, requires_approval, approver_role, rollback)) s

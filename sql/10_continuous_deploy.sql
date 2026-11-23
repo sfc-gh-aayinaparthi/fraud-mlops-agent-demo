@@ -79,9 +79,11 @@ CREATE OR REPLACE TASK TASK_CONTINUOUS_DEPLOY
   SCHEDULE = '1 MINUTE'
 AS CALL MLOPS_CONTROL.CORE.DEPLOY_ALL_FROM_GIT();
 
--- fraud system hook (configuration)
+-- fraud system hook: the feature set file registers Feature Store views (sql/16_feature_store.sql)
 DELETE FROM COMPONENT_DEPLOY WHERE entity_id = 'fraud.feat.txn_features';
 INSERT INTO COMPONENT_DEPLOY VALUES ('fraud.feat.txn_features', 'fraud', 'MLOPS_CONTROL.CORE.REPO_FRAUD_MLOPS', 'main',
-  'pipeline/features/features_txn.sql', '-- VERSION: (\\w+)',
-  'FRAUD_AUTOML_DEMO.OPS.DEPLOY_FEATURE_PIPELINE',
-  'SELECT MAX(version) FROM FRAUD_AUTOML_DEMO.OPS.ACTIVE_COMPONENTS WHERE component = ''feature_pipeline''');
+  'pipeline/features/feature_set.sql', '-- VERSION: (\\w+)',
+  'FRAUD_AUTOML_DEMO.OPS.DEPLOY_FEATURE_SET',
+  -- compare main with the last version deployed FROM GIT, so an approved emergency switch
+  -- (OPS.ACTIVATE_FEATURE_SET) holds until the next merge instead of being redeployed over
+  'SELECT version FROM FRAUD_AUTOML_DEMO.MONITORING.PIPELINE_CHANGE_LOG WHERE component = ''feature_pipeline'' AND author LIKE ''cd:%'' ORDER BY deployed_at DESC LIMIT 1');

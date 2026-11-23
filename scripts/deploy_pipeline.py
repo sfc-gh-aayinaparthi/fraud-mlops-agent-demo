@@ -1,4 +1,7 @@
-"""Deploy the feature pipeline at the current Git commit (used by CI on merge to main).
+"""Deploy the feature set at the current Git commit (used by CI on merge to main).
+
+Registers any new Feature Store view versions named in pipeline/features/feature_set.sql
+and makes the set live, via OPS.DEPLOY_FEATURE_SET.
 
 Usage: uv run python scripts/deploy_pipeline.py <version> [--connection AZAU_ANUDEEP]
 """
@@ -9,7 +12,7 @@ import subprocess
 import snowflake.connector
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PIPELINE_FILE = os.path.join(ROOT, "pipeline", "features", "features_txn.sql")
+PIPELINE_FILE = os.path.join(ROOT, "pipeline", "features", "feature_set.sql")
 
 
 def git(*args: str) -> str:
@@ -36,7 +39,7 @@ def main() -> None:
     cur.execute("USE DATABASE FRAUD_AUTOML_DEMO")
     cur.execute("USE WAREHOUSE FRAUD_WH")
     cur.execute(
-        "CALL FRAUD_AUTOML_DEMO.OPS.DEPLOY_FEATURE_PIPELINE(%s, %s, %s, %s, %s)",
+        "CALL FRAUD_AUTOML_DEMO.OPS.DEPLOY_FEATURE_SET(%s, %s, %s, %s, %s)",
         (a.version, sha, author, message, source_sql),
     )
     print(cur.fetchone()[0])

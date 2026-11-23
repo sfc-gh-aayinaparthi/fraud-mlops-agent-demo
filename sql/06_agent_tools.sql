@@ -8,14 +8,14 @@ CREATE OR REPLACE TABLE MONITORING.FEATURE_LINEAGE (
   feature STRING, is_model_input BOOLEAN, derived_from STRING, source_tables STRING,
   transformation STRING, owner STRING);
 INSERT INTO MONITORING.FEATURE_LINEAGE VALUES
- ('amt_to_cust_avg_30d', TRUE,  'amount, cust_avg_amt_30d', 'RAW.TRANSACTIONS (+ any customer-profile source used for cust_avg_amt_30d)', 'amount / COALESCE(cust_avg_amt_30d, 1)', 'fraud-data-eng'),
- ('cust_avg_amt_30d',    FALSE, 'amount history', 'RAW.TRANSACTIONS (v1 window) / RAW.CUSTOMER_PROFILE_V2 (if used)', '30-day average spend per customer', 'fraud-data-eng'),
+ ('amt_to_cust_avg_30d', TRUE,  'amount, cust_avg_amt_30d', 'RAW.TRANSACTIONS + the feature view providing cust_avg_amt_30d', 'amount / COALESCE(cust_avg_amt_30d, 1), at scoring time', 'fraud-data-eng'),
+ ('cust_avg_amt_30d',    FALSE, 'amount history', 'Feature view CUSTOMER_SPEND/V1 <- RAW.TRANSACTIONS (set V1); CARD_SPEND_PROFILE/V1 <- RAW.CUSTOMER_PROFILE_V2 (set V2)', '30-day average spend per customer, joined as of the transaction', 'fraud-data-eng'),
  ('amount',              TRUE,  'amount', 'RAW.TRANSACTIONS', 'passthrough', 'payments-platform'),
- ('txn_count_1h',        TRUE,  'card_id, txn_ts', 'RAW.TRANSACTIONS', 'card velocity, 1h window', 'fraud-data-eng'),
- ('txn_count_24h',       TRUE,  'card_id, txn_ts', 'RAW.TRANSACTIONS', 'card velocity, 24h window', 'fraud-data-eng'),
- ('distance_from_home_km',TRUE, 'home lat/lon, merchant lat/lon', 'RAW.CUSTOMERS, RAW.MERCHANTS', 'haversine distance', 'fraud-data-eng'),
- ('merchant_risk_score', TRUE,  'merchant_risk_score', 'RAW.MERCHANTS', 'passthrough', 'merchant-risk'),
- ('is_new_merchant',     TRUE,  'customer_id, merchant_id', 'RAW.TRANSACTIONS', 'first txn at merchant in 30d', 'fraud-data-eng'),
+ ('txn_count_1h',        TRUE,  'card_id, txn_ts', 'RAW.TRANSACTIONS', 'card velocity, 1h window, at scoring time', 'fraud-data-eng'),
+ ('txn_count_24h',       TRUE,  'card_id, txn_ts', 'RAW.TRANSACTIONS', 'card velocity, 24h window, at scoring time', 'fraud-data-eng'),
+ ('distance_from_home_km',TRUE, 'home lat/lon, merchant lat/lon', 'Feature views CUSTOMER_PROFILE/V1 <- RAW.CUSTOMERS and MERCHANT_PROFILE/V1 <- RAW.MERCHANTS', 'haversine distance, at scoring time', 'fraud-data-eng'),
+ ('merchant_risk_score', TRUE,  'merchant_risk_score', 'Feature view MERCHANT_PROFILE/V1 <- RAW.MERCHANTS', 'passthrough', 'merchant-risk'),
+ ('is_new_merchant',     TRUE,  'customer_id, merchant_id', 'RAW.TRANSACTIONS', 'first txn at merchant in 30d, at scoring time', 'fraud-data-eng'),
  ('hour_of_day',         TRUE,  'txn_ts', 'RAW.TRANSACTIONS', 'HOUR(txn_ts)', 'fraud-data-eng'),
  ('is_online',           TRUE,  'channel', 'RAW.TRANSACTIONS', 'channel = ONLINE', 'payments-platform');
 
@@ -112,11 +112,12 @@ CREATE TABLE IF NOT EXISTS MONITORING.AGENT_INCIDENTS (
 
 -- 5. Counterfactual: re-score a window with ONE component reverted, everything else fixed.
 --    revert_type:
---      pipeline_version  -> rebuild features with a logged pipeline version's SQL
+--      pipeline_version  -> rebuild features with another feature set version (Feature Store views)
+--      feature_view      -> active feature set, but one view swapped for another version ('VIEW/VER')
 --      model_version     -> score the served features with another model version
---      input_asof        -> active pipeline, but dimension inputs as of a timestamp (Time Travel)
+--      input_asof        -> active feature set, but the tables behind its views as of a timestamp (Time Travel)
 --      feature_ablation  -> replace one model input with its prior-7-day median (sensitivity only)
---    Read-only: every statement is a SELECT.
+--    Read-only: every statement is a SELECT (features come from FEATURES.FEATURE_SET_SQL).
 CREATE OR REPLACE PROCEDURE MONITORING.COUNTERFACTUAL_RATE(
   REVERT_TYPE STRING, REVERT_VALUE STRING, START_TS TIMESTAMP_NTZ, END_TS TIMESTAMP_NTZ)
 RETURNS TABLE (revert_type STRING, revert_value STRING, active_pipeline STRING, active_model STRING,
@@ -134,12 +135,6 @@ import json
 import re
 
 DB = "FRAUD_AUTOML_DEMO"
-DIM_TABLES = ["CUSTOMERS", "MERCHANTS", "CARDS", "CUSTOMER_PROFILE_V2"]
-ARGS = {
-    "V0": ["amount", "amt_to_cust_avg_30d", "merchant_risk_score", "hour_of_day", "is_online"],
-    "V1": ["amount", "amt_to_cust_avg_30d", "txn_count_1h", "txn_count_24h", "distance_from_home_km",
-           "merchant_risk_score", "is_new_merchant", "hour_of_day", "is_online"],
-}
 SAFE = re.compile(r"^[A-Za-z0-9_]+$")
 TS = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$")
 
@@ -148,23 +143,22 @@ def one(session, sql, params=None):
     return session.sql(sql, params=params).collect()[0][0]
 
 
-def pipeline_body(session, version):
-    src = one(session,
-        f"SELECT source_sql FROM {DB}.MONITORING.PIPELINE_CHANGE_LOG WHERE component = 'feature_pipeline' "
-        "AND version = ? AND source_sql IS NOT NULL ORDER BY deployed_at DESC LIMIT 1", [version.upper()])
-    if src is None:
-        raise ValueError(f"no logged source SQL for pipeline version {version}")
-    delim = "$" + "$"  # the function body delimiter, split so this proc body stays valid
-    return src[src.index(delim) + 2: src.rindex(delim)]
+def model_args(session, version):
+    """Input columns of a model version, from its registered PREDICT_PROBA signature."""
+    if not SAFE.match(version or ""):
+        raise ValueError("bad model version")
+    session.sql(f"SHOW FUNCTIONS IN MODEL {DB}.ML.FRAUD_XGB VERSION {version}").collect()
+    sig = one(session, 'SELECT "arguments" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = \'PREDICT_PROBA\'')
+    return [a.strip().split(" ")[0] for a in sig.strip("()").split(",") if a.strip()]
 
 
-def bind_window(body, s, e):
-    body = re.sub(r"\bSTART_TS\b", f"'{s}'::TIMESTAMP_NTZ", body)
-    return re.sub(r"\bEND_TS\b", f"'{e}'::TIMESTAMP_NTZ", body)
+def features(session, set_version, s, e, options=None):
+    return one(session, "CALL FEATURES.FEATURE_SET_SQL(?, ?, ?, PARSE_JSON(?))",
+               [set_version, s, e, json.dumps(options or {})])
 
 
 def score(session, features_sql, model_version):
-    args = ", ".join(ARGS[model_version])
+    args = ", ".join(model_args(session, model_version))
     q = (f"WITH m AS MODEL {DB}.ML.FRAUD_XGB VERSION {model_version} "
          f"SELECT IFF(f.card_issued_dt >= '2026-11-01', 'ISSUED_SINCE_NOV', 'ISSUED_BEFORE_NOV') AS cohort, "
          f"IFF(m!PREDICT_PROBA({args}):output_feature_1::FLOAT >= 0.5, 1, 0) AS flag "
@@ -180,7 +174,7 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
     if not (TS.match(s) and TS.match(e)):
         raise ValueError("bad timestamps")
     revert_type = (revert_type or "").lower()
-    active_fp = one(session, f"SELECT MAX(version) FROM {DB}.OPS.ACTIVE_COMPONENTS WHERE component='feature_pipeline'")
+    active_fp = one(session, f"SELECT MAX(set_version) FROM {DB}.OPS.ACTIVE_FEATURE_SET")
     active_mv = one(session, f"SELECT MAX(version) FROM {DB}.OPS.ACTIVE_COMPONENTS WHERE component='model'")
     served = (f"SELECT * FROM {DB}.SERVING.FEATURE_LOG WHERE txn_ts >= '{s}'::TIMESTAMP_NTZ "
               f"AND txn_ts < '{e}'::TIMESTAMP_NTZ")
@@ -189,32 +183,33 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
     if revert_type == "pipeline_version":
         if not SAFE.match(revert_value or ""):
             raise ValueError("bad version")
-        n, cf, coh = score(session, bind_window(pipeline_body(session, revert_value), s, e), active_mv)
-        note = f"features rebuilt with pipeline {revert_value.upper()} (logged SQL), scored by model {active_mv}"
+        n, cf, coh = score(session, features(session, revert_value.upper(), s, e), active_mv)
+        views = session.sql(f"SELECT LISTAGG(view_name || '/' || view_version, ', ') FROM {DB}.OPS.FEATURE_SETS "
+                            "WHERE set_version = ?", params=[revert_value.upper()]).collect()[0][0]
+        note = (f"features rebuilt with feature set {revert_value.upper()} ({views}) from the Feature Store, "
+                f"scored by model {active_mv}")
+    elif revert_type == "feature_view":
+        n, cf, coh = score(session, features(session, active_fp, s, e, {"swap": revert_value}), active_mv)
+        note = (f"feature set {active_fp} with {str(revert_value).upper()} swapped in for the view providing "
+                f"the same features, scored by model {active_mv}")
     elif revert_type == "model_version":
         mv = (revert_value or "").upper()
-        if mv not in ARGS:
-            raise ValueError(f"unknown model version {revert_value}")
         n, cf, coh = score(session, served, mv)
         note = f"served features scored by model {mv} instead of {active_mv}"
     elif revert_type == "input_asof":
         if not TS.match(revert_value or ""):
             raise ValueError("input_asof needs a timestamp")
-        body = bind_window(pipeline_body(session, active_fp), s, e)
-        for t in DIM_TABLES:
-            body = re.sub(rf"{DB}\.RAW\.{t}\b",
-                          f"{DB}.RAW.{t} AT(TIMESTAMP => '{revert_value}'::TIMESTAMP_LTZ)", body)
         try:
-            n, cf, coh = score(session, body, active_mv)
+            n, cf, coh = score(session, features(session, active_fp, s, e, {"asof": revert_value}), active_mv)
         except Exception as ex:  # e.g. timestamp before table creation / outside retention
             n, cf, coh = None, None, {}
             note = f"input_asof unavailable: {str(ex)[:160]}"
         if cf is not None:
-            note = (f"active pipeline {active_fp}, dimension tables {','.join(DIM_TABLES)} as of {revert_value} "
+            note = (f"feature set {active_fp}, with the tables behind its profile views as of {revert_value} "
                     "(Time Travel); transactions unchanged")
     elif revert_type == "feature_ablation":
         feat = (revert_value or "").lower()
-        if feat not in ARGS["V1"]:
+        if feat not in [a.lower() for a in model_args(session, active_mv)]:
             raise ValueError(f"{revert_value} is not a model input")
         med = one(session,
             f"SELECT MEDIAN({feat}) FROM {DB}.SERVING.FEATURE_LOG "
@@ -223,7 +218,8 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
         note = (f"{feat} replaced by prior-7-day median {med}; sensitivity check only - also removes "
                 "genuine signal, so never sufficient to confirm a cause")
     else:
-        raise ValueError("revert_type must be pipeline_version | model_version | input_asof | feature_ablation")
+        raise ValueError("revert_type must be pipeline_version | feature_view | model_version | input_asof | "
+                         "feature_ablation")
 
     actual = one(session,
         f"SELECT AVG(is_flagged) FROM {DB}.SERVING.PREDICTIONS WHERE txn_ts >= '{s}'::TIMESTAMP_NTZ "
@@ -247,10 +243,10 @@ def run(session, revert_type, revert_value, start_ts, end_ts):
         schema=["revert_type", "revert_value", "active_pipeline", "active_model", "window_start",
                 "window_end", "n", "actual_rate", "counterfactual_rate", "baseline_rate",
                 "excess_explained_pct", "passes_confirmation", "by_cohort", "note"],
-    ).select_expr("revert_type", "revert_value", "active_pipeline", "active_model",
-                  "window_start::TIMESTAMP_NTZ", "window_end::TIMESTAMP_NTZ", "n", "actual_rate",
-                  "counterfactual_rate", "baseline_rate", "excess_explained_pct", "passes_confirmation",
-                  "PARSE_JSON(by_cohort)", "note")
+    ).select_expr("revert_type::STRING", "revert_value::STRING", "active_pipeline::STRING", "active_model::STRING",
+                  "window_start::TIMESTAMP_NTZ", "window_end::TIMESTAMP_NTZ", "n::NUMBER", "actual_rate::FLOAT",
+                  "counterfactual_rate::FLOAT", "baseline_rate::FLOAT", "excess_explained_pct::FLOAT",
+                  "passes_confirmation::BOOLEAN", "PARSE_JSON(by_cohort)", "note::STRING")
 $$;
 
 GRANT USAGE ON PROCEDURE MONITORING.COUNTERFACTUAL_RATE(STRING, STRING, TIMESTAMP_NTZ, TIMESTAMP_NTZ) TO ROLE FRAUD_AGENT_RO;

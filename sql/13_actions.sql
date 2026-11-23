@@ -97,6 +97,15 @@ def run(session, proposal_id, decision, note):
                     raise ValueError("bad model/version")
                 session.sql(f"ALTER MODEL {model} SET DEFAULT_VERSION = {version}").collect()
                 result = {"model": model, "default_version": version}
+            elif atype == "set_feature_set":
+                version = str(params["version"])
+                if not re.match(r"^[A-Za-z0-9_]+$", version):
+                    raise ValueError("bad feature set version")
+                res = session.sql("CALL FRAUD_AUTOML_DEMO.OPS.ACTIVATE_FEATURE_SET(?, ?, ?)",
+                                  params=[version, actor, note or p["RATIONALE"] or ""]).collect()[0][0]
+                if res.startswith("error"):
+                    raise ValueError(res)
+                result = {"feature_set": version.upper(), "message": res}
             elif atype == "suspend_task":
                 task = params["task"]
                 if not re.match(r"^[A-Za-z0-9_.$\"]+$", task):

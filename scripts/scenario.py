@@ -15,7 +15,7 @@ import snowflake.connector
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "sfc-gh-aayinaparthi/fraud-mlops-agent-demo"
-FILE = os.path.join(ROOT, "pipeline", "features", "features_txn.sql")
+FILE = os.path.join(ROOT, "pipeline", "features", "feature_set.sql")
 CONN = os.getenv("SNOWFLAKE_CONNECTION", "AZAU_ANUDEEP")
 AUTHOR = ["-c", "user.name=Daniel Wu", "-c", "user.email=daniel.wu@example.com", "-c", "commit.gpgsign=false"]
 
@@ -51,20 +51,16 @@ def deploy_main():
 
 
 def v2_source(src: str) -> str:
+    """The planted change: take 30-day spend from the new profile platform's card-level view."""
     src = src.replace("-- VERSION: v1", "-- VERSION: v2")
-    src = src.replace(
-        """    AVG(h.amount) OVER (PARTITION BY h.customer_id ORDER BY h.txn_ts
-        RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW) AS cust_avg_amt_30d,
-""", "")
-    src = src.replace(
-        "       w.cust_avg_amt_30d::FLOAT AS cust_avg_amt_30d,\n       (w.amount / COALESCE(w.cust_avg_amt_30d, 1))::FLOAT AS amt_to_cust_avg_30d,",
-        "       p.avg_amt_30d::FLOAT AS cust_avg_amt_30d,\n       (w.amount / COALESCE(p.avg_amt_30d, 1))::FLOAT AS amt_to_cust_avg_30d,")
-    src = src.replace(
-        "JOIN FRAUD_AUTOML_DEMO.RAW.CARDS cd ON cd.card_id = w.card_id\n",
-        "JOIN FRAUD_AUTOML_DEMO.RAW.CARDS cd ON cd.card_id = w.card_id\n"
-        "-- perf: use precomputed spend profile from the new customer-profile platform\n"
-        "LEFT JOIN FRAUD_AUTOML_DEMO.RAW.CUSTOMER_PROFILE_V2 p ON p.card_id = w.card_id\n")
-    assert "CUSTOMER_PROFILE_V2" in src and "RANGE BETWEEN INTERVAL '30 days'" not in src
+    src = src.replace("-- USES: CUSTOMER_SPEND/V1,", "-- USES: CARD_SPEND_PROFILE/V1,")
+    src = src.rstrip("\n") + (
+        "\n\n-- @feature_view CARD_SPEND_PROFILE/V1 entity=CARD\n"
+        "-- desc: Precomputed 30-day spend per card from the new customer-profile platform\n"
+        "-- perf: replaces the 30-day window scan over transactions\n"
+        "SELECT card_id, avg_amt_30d::FLOAT AS cust_avg_amt_30d\n"
+        "FROM FRAUD_AUTOML_DEMO.RAW.CUSTOMER_PROFILE_V2;\n")
+    assert "-- USES: CARD_SPEND_PROFILE/V1," in src
     return src
 
 
@@ -85,12 +81,13 @@ def inject():
         f.write(new_src)
     # commit only the pipeline file, so unrelated local edits never ride along (or get reverted)
     sh("git", *AUTHOR, "commit", FILE, "-m",
-       "perf(features): source 30d customer spend from CUSTOMER_PROFILE_V2 instead of window scan")
+       "perf(features): take 30d spend from the customer-profile v2 feature view instead of window scan")
     sh("git", "push", "-f", "-u", "origin", branch)
     url = sh("gh", "pr", "create", "--repo", REPO, "--base", "main", "--head", branch,
              "--title", "perf(features): use customer profile v2 for 30d spend",
-             "--body", "Replaces the 30-day window scan with the precomputed spend profile from the new "
-                       "customer-profile platform. ~4x faster feature build. Tested on a sample of legacy cards.")
+             "--body", "Feature set v2: swaps the CUSTOMER_SPEND feature view (30-day window scan) for the new "
+                       "CARD_SPEND_PROFILE view on the customer-profile platform. ~4x faster refresh. "
+                       "Tested on a sample of legacy cards.")
     print(url)
     sh("gh", "pr", "merge", url, "--squash", "--admin", "--delete-branch")
     deploy_main()
@@ -110,7 +107,7 @@ def reset():
     sh("git", "pull", "--ff-only")
     if deployed_version_on_main() != "v1":
         raise SystemExit("main is not on v1 - merge the revert PR (or revert manually) first")
-    v = sql("SELECT MAX(version) FROM OPS.ACTIVE_COMPONENTS WHERE component='feature_pipeline'")[0][0]
+    v = sql("SELECT MAX(set_version) FROM OPS.ACTIVE_FEATURE_SET")[0][0]
     if v != "V1":
         deploy_main()
     # remove everything generated since the first scenario started, so baselines stay clean

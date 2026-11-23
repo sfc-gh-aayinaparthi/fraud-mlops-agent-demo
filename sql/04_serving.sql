@@ -46,7 +46,7 @@ WHERE NOT EXISTS (SELECT 1 FROM MONITORING.PIPELINE_CHANGE_LOG WHERE component =
 
 CREATE TABLE IF NOT EXISTS OPS.PIPELINE_STATE (last_tick TIMESTAMP_NTZ);
 
--- Score [START_TS, END_TS) with the active feature pipeline and model versions
+-- Score [START_TS, END_TS) with the active feature set (Feature Store) and model version
 CREATE OR REPLACE PROCEDURE SERVING.SCORE_WINDOW(START_TS TIMESTAMP_NTZ, END_TS TIMESTAMP_NTZ)
 RETURNS STRING
 LANGUAGE SQL
@@ -57,17 +57,21 @@ DECLARE
   fv STRING;
   mv STRING;
   args STRING;
+  q STRING;
   n NUMBER;
 BEGIN
-  SELECT MAX(version) INTO :fv FROM OPS.ACTIVE_COMPONENTS WHERE component = 'feature_pipeline';
+  SELECT MAX(set_version) INTO :fv FROM OPS.ACTIVE_FEATURE_SET;
   SELECT MAX(version) INTO :mv FROM OPS.ACTIVE_COMPONENTS WHERE component = 'model';
-  args := IFF(:mv = 'V0',
-    'amount, amt_to_cust_avg_30d, merchant_risk_score, hour_of_day, is_online',
-    'amount, amt_to_cust_avg_30d, txn_count_1h, txn_count_24h, distance_from_home_km, merchant_risk_score, is_new_merchant, hour_of_day, is_online');
+  -- model inputs come from the registered model version's signature
+  EXECUTE IMMEDIATE 'SHOW FUNCTIONS IN MODEL ML.FRAUD_XGB VERSION ' || :mv;
+  SELECT REGEXP_REPLACE(TRIM("arguments", '()'), '([A-Z0-9_]+) [A-Z_]+(\\([0-9, ]*\\))?', '\\1') INTO :args
+    FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = 'PREDICT_PROBA';
 
+  CALL OPS.REFRESH_FEATURE_SET(:fv);
+  CALL FEATURES.FEATURE_SET_SQL(:fv, :START_TS::STRING, :END_TS::STRING, NULL) INTO :q;
   EXECUTE IMMEDIATE
     'INSERT INTO SERVING.FEATURE_LOG SELECT f.*, ''' || :fv || ''', CURRENT_TIMESTAMP()::TIMESTAMP_NTZ ' ||
-    'FROM TABLE(FEATURES.FN_TXN_FEATURES_' || :fv || '(''' || :START_TS || '''::TIMESTAMP_NTZ, ''' || :END_TS || '''::TIMESTAMP_NTZ)) f';
+    'FROM (' || :q || ') f';
   n := SQLROWCOUNT;
 
   EXECUTE IMMEDIATE
