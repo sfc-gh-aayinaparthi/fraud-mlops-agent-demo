@@ -79,7 +79,7 @@ def run(session, source, commit_sha):
         d = views[(n, v)]
         if d["entity"] not in ENTITIES:
             raise ValueError(f"{n}/{v}: unknown entity {d['entity']}")
-        row = session.sql("SELECT query FROM OPS.FEATURE_VIEW_VERSIONS WHERE view_name = ? AND view_version = ?",
+        row = session.sql(f"SELECT query FROM {DB}.OPS.FEATURE_VIEW_VERSIONS WHERE view_name = ? AND view_version = ?",
                           params=[n, v]).collect()
         if row:
             if norm(row[0][0]) != norm(d["query"]):
@@ -98,7 +98,7 @@ def run(session, source, commit_sha):
         key = ENTITIES[d["entity"]]
         cols = [c.strip('"').upper() for c in df.columns]
         feats = [c for c in cols if c not in (key, d["ts"])]
-        session.sql("""INSERT INTO OPS.FEATURE_VIEW_VERSIONS
+        session.sql(f"""INSERT INTO {DB}.OPS.FEATURE_VIEW_VERSIONS
                          (view_name, view_version, object_name, entity, join_key, timestamp_col, features,
                           description, query, commit_sha)
                        SELECT ?, ?, ?, ?, ?, NULLIF(?, ''), PARSE_JSON(?), ?, ?, ?""",
@@ -106,9 +106,9 @@ def run(session, source, commit_sha):
                             json.dumps(feats), d["desc"], d["query"], commit_sha]).collect()
         new.append(f"{n}/{v}")
 
-    session.sql("DELETE FROM OPS.FEATURE_SETS WHERE set_version = ?", params=[ver]).collect()
+    session.sql(f"DELETE FROM {DB}.OPS.FEATURE_SETS WHERE set_version = ?", params=[ver]).collect()
     for n, v in uses:
-        session.sql("INSERT INTO OPS.FEATURE_SETS (set_version, view_name, view_version, commit_sha) SELECT ?, ?, ?, ?",
+        session.sql(f"INSERT INTO {DB}.OPS.FEATURE_SETS (set_version, view_name, view_version, commit_sha) SELECT ?, ?, ?, ?",
                     params=[ver, n, v, commit_sha]).collect()
     return (f"feature set {ver} = {', '.join(f'{n}/{v}' for n, v in uses)}; "
             f"new feature views: {', '.join(new) or 'none'}")
@@ -269,7 +269,8 @@ def run(session, set_version, s, e, options):
             f"FROM w {' '.join(joins)} WHERE {window}")
 $$;
 
--- Bring the set's managed (timestamped) feature views up to date before scoring
+-- Bring managed (timestamped) feature views up to date before scoring. NULL = every registered
+-- managed view, so a set you might roll back to (or replay in a what-if) is never stale.
 CREATE OR REPLACE PROCEDURE OPS.REFRESH_FEATURE_SET(SET_VERSION STRING)
 RETURNS STRING
 LANGUAGE SQL
@@ -279,9 +280,10 @@ $$
 DECLARE
   out STRING DEFAULT '';
 BEGIN
-  LET rs RESULTSET := (SELECT v.object_name FROM OPS.FEATURE_VIEW_VERSIONS v
+  LET rs RESULTSET := (SELECT DISTINCT v.object_name FROM OPS.FEATURE_VIEW_VERSIONS v
                        JOIN OPS.FEATURE_SETS s ON s.view_name = v.view_name AND s.view_version = v.view_version
-                       WHERE s.set_version = UPPER(:SET_VERSION) AND v.timestamp_col IS NOT NULL);
+                       WHERE (:SET_VERSION IS NULL OR s.set_version = UPPER(:SET_VERSION))
+                         AND v.timestamp_col IS NOT NULL);
   LET c CURSOR FOR rs;
   FOR rec IN c DO
     LET obj STRING := rec.object_name;
