@@ -7,14 +7,14 @@
  * station they last passed, so a sick component visibly contaminates downstream.
  * The agent appears as a violet probe hovering over whatever it is inspecting.
  */
-import { STAGE_ORDER, type Status } from '@/lib/status';
+import { STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, type Status } from '@/lib/status';
 import { Bounds, Html, OrbitControls, RoundedBox } from '@react-three/drei';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 
-export type TwinEntity = { entity_id: string; name: string; stage: string; entity_type: string; status: Status };
+export type TwinEntity = { entity_id: string; name: string; stage: string; entity_type: string; status: Status; subtitle?: string | null };
 export type TwinEdge = { from_id: string; to_id: string; relation?: string };
 
 type Props = {
@@ -27,6 +27,8 @@ type Props = {
   onSelect?: (id: string) => void;
   height?: number;
   compact?: boolean;
+  /** Show dots for real traffic; false when the volume is not known (e.g. replay). */
+  liveFlow?: boolean;
 };
 
 function useThemeColors() {
@@ -67,7 +69,7 @@ export function layout(entities: TwinEntity[]) {
   const stages = STAGE_ORDER.filter((s) => visible.some((e) => e.stage === s));
   const pos = new Map<string, THREE.Vector3>();
   const LANE = 4.4;
-  const GAP = 2.1;
+  const GAP = 2.4;
   stages.forEach((stage, i) => {
     const members = visible.filter((e) => e.stage === stage).sort((a, b) => a.name.localeCompare(b.name));
     members.forEach((e, j) => {
@@ -89,6 +91,7 @@ function Station({ e, p, color, selected, onSelect, compact }: {
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const mat = useRef<THREE.MeshStandardMaterial>(null);
+  const [hover, setHover] = useState(false);
   const critical = e.status === 'critical';
   useFrame(({ clock }) => {
     if (!mat.current || !ref.current) return;
@@ -106,8 +109,8 @@ function Station({ e, p, color, selected, onSelect, compact }: {
         radius={0.12}
         smoothness={4}
         onClick={(ev) => { ev.stopPropagation(); onSelect?.(e.entity_id); }}
-        onPointerOver={() => (document.body.style.cursor = 'pointer')}
-        onPointerOut={() => (document.body.style.cursor = '')}
+        onPointerOver={() => { document.body.style.cursor = 'pointer'; setHover(true); }}
+        onPointerOut={() => { document.body.style.cursor = ''; setHover(false); }}
       >
         <meshStandardMaterial ref={mat} color="#0d141a" emissive={color} emissiveIntensity={0.4} roughness={0.35} metalness={0.6} />
       </RoundedBox>
@@ -116,24 +119,46 @@ function Station({ e, p, color, selected, onSelect, compact }: {
         <ringGeometry args={[size[0] * 0.62, size[0] * 0.7, 48]} />
         <meshBasicMaterial color={color} transparent opacity={selected ? 0.9 : 0.45} />
       </mesh>
-      {!compact && (
-        <Html position={[0, size[1] + 0.55, 0]} center distanceFactor={9} zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
-          <div className="whitespace-nowrap rounded-md border border-border/60 bg-background/80 px-2 py-1 text-center backdrop-blur">
-            <div className="font-display text-[13px] font-medium leading-tight text-foreground">{e.name}</div>
-            <div className="text-[10px] uppercase tracking-wider" style={{ color }}>{e.status === 'warning' ? 'degraded' : e.status}</div>
-          </div>
-        </Html>
-      )}
+      <Html position={[0, size[1] + 0.55, 0]} center distanceFactor={compact ? 12 : 9} zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+        <div className="whitespace-nowrap rounded-md border border-border/60 bg-background/80 px-2 py-1 text-center backdrop-blur">
+          <div className="font-display text-[13px] font-medium leading-tight text-foreground">{e.name}</div>
+          {!compact && (
+            <div className="text-[10px] uppercase tracking-wider" style={{ color }}>{STATUS_LABEL[e.status] ?? e.status}</div>
+          )}
+          {!compact && (hover || selected) && e.subtitle && (
+            <div className="mt-0.5 max-w-[220px] whitespace-normal text-[11px] leading-snug text-muted-foreground">{e.subtitle}</div>
+          )}
+        </div>
+      </Html>
     </group>
   );
 }
 
-function Pipe({ curve, color }: { curve: THREE.QuadraticBezierCurve3; color: string }) {
+function Pipe({ curve, color, label }: { curve: THREE.QuadraticBezierCurve3; color: string; label?: string }) {
   const geo = useMemo(() => new THREE.TubeGeometry(curve, 40, 0.035, 8, false), [curve]);
+  // arrowhead near the destination, pointing along the curve
+  const head = useMemo(() => {
+    const t = 0.82;
+    const p = curve.getPoint(t);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), curve.getTangent(t).normalize());
+    return { p, q };
+  }, [curve]);
+  const mid = useMemo(() => curve.getPoint(0.5), [curve]);
   return (
-    <mesh geometry={geo}>
-      <meshBasicMaterial color={color} transparent opacity={0.28} />
-    </mesh>
+    <group>
+      <mesh geometry={geo}>
+        <meshBasicMaterial color={color} transparent opacity={0.35} />
+      </mesh>
+      <mesh position={head.p} quaternion={head.q}>
+        <coneGeometry args={[0.11, 0.3, 14]} />
+        <meshBasicMaterial color={color} transparent opacity={0.8} />
+      </mesh>
+      {label && (
+        <Html position={[mid.x, mid.y + 0.12, mid.z]} center distanceFactor={11} zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
+          <div className="whitespace-nowrap rounded bg-background/70 px-1 text-[10px] text-muted-foreground">{label}</div>
+        </Html>
+      )}
+    </group>
   );
 }
 
@@ -191,6 +216,9 @@ function Probe({ target, color }: { target: THREE.Vector3 | null; color: string 
   if (!target) return null;
   return (
     <group ref={g} position={[target.x, 3, target.z]}>
+      <Html position={[0, 0.6, 0]} center distanceFactor={10} style={{ pointerEvents: 'none' }}>
+        <div className="whitespace-nowrap rounded bg-agent/20 px-1.5 py-0.5 text-[11px] font-medium text-agent">Agent is looking here</div>
+      </Html>
       <mesh>
         <icosahedronGeometry args={[0.22, 1]} />
         <meshBasicMaterial color={color} toneMapped={false} />
@@ -209,9 +237,12 @@ function Probe({ target, color }: { target: THREE.Vector3 | null; color: string 
 
 function Scene(props: Props & { colors: NonNullable<ReturnType<typeof useThemeColors>>; reduced: boolean }) {
   const { entities, edges, colors, reduced } = props;
-  const { pos, stages, LANE } = useMemo(() => layout(entities), [entities]);
+  // layout and curves depend only on topology, so polling for fresh health does not rebuild the scene
+  const topoKey = entities.map((e) => `${e.entity_id}:${e.stage}:${e.name}`).join('|');
+  const edgeKey = edges.map((e) => `${e.from_id}>${e.to_id}:${e.relation ?? ''}`).join('|');
+  const { pos, stages, LANE } = useMemo(() => layout(entities), [topoKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const byId = useMemo(() => new Map(entities.map((e) => [e.entity_id, e])), [entities]);
-  const live = edges.filter((e) => pos.has(e.from_id) && pos.has(e.to_id));
+  const live = useMemo(() => edges.filter((e) => pos.has(e.from_id) && pos.has(e.to_id)), [edgeKey, pos]); // eslint-disable-line react-hooks/exhaustive-deps
   const curves = useMemo(() => live.map((e) => curveFor(pos.get(e.from_id)!, pos.get(e.to_id)!)), [live, pos]);
   const colorOf = (s?: Status) => (s ? colors[s] : colors.unknown);
   // a particle carries the worst status it has passed through
@@ -237,7 +268,7 @@ function Scene(props: Props & { colors: NonNullable<ReturnType<typeof useThemeCo
   const flagged = live.map((e) => byId.get(e.to_id)?.stage === 'decision');
   const width = Math.max(1, stages.length) * LANE;
   const zs = [...pos.values()].map((p) => p.z);
-  const front = (zs.length ? Math.max(...zs) : 0) + 1.8;
+  const back = (zs.length ? Math.min(...zs) : 0) - 3.2;
   return (
     <>
       <color attach="background" args={[colors.bg]} />
@@ -246,14 +277,16 @@ function Scene(props: Props & { colors: NonNullable<ReturnType<typeof useThemeCo
       <directionalLight position={[6, 10, 4]} intensity={0.9} />
       <gridHelper args={[width + 10, Math.round((width + 10) / 1.1), colors.grid, colors.grid]} position={[0, 0, 0]} />
       {!props.compact && stages.map((s, i) => (
-        <Html key={s} position={[(i - (stages.length - 1) / 2) * LANE, 0.02, front]} center distanceFactor={10} style={{ pointerEvents: 'none' }}>
-          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{s}</div>
+        <Html key={`lane-${s}`} position={[(i - (stages.length - 1) / 2) * LANE, 0.02, back]} center distanceFactor={10} zIndexRange={[4, 0]} style={{ pointerEvents: 'none' }}>
+          <div className="whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{i + 1} · {STAGE_LABEL[s] ?? s}</div>
         </Html>
       ))}
-      <Bounds fit clip observe margin={props.compact ? 0.62 : 0.68} maxDuration={0}>
-      {curves.map((c, i) => <Pipe key={i} curve={c} color={edgeColors[i]} />)}
-      <Flow curves={curves} colors={edgeColors} flagged={flagged} volume={props.volume} flagShare={Math.min(0.6, props.flagShare * 3)}
-        paused={reduced} critical={colors.critical} />
+      <Bounds fit clip observe margin={props.compact ? 0.85 : 0.95} maxDuration={0}>
+      {curves.map((c, i) => <Pipe key={i} curve={c} color={edgeColors[i]} label={props.compact ? undefined : live[i].relation} />)}
+      {props.liveFlow !== false && (
+        <Flow curves={curves} colors={edgeColors} flagged={flagged} volume={props.volume} flagShare={Math.min(1, props.flagShare)}
+          paused={reduced} critical={colors.critical} />
+      )}
       {entities.filter((e) => pos.has(e.entity_id)).map((e) => (
         <Station key={e.entity_id} e={e} p={pos.get(e.entity_id)!} color={colorOf(e.status)} selected={props.selected === e.entity_id}
           onSelect={props.onSelect} compact={props.compact} />
@@ -275,9 +308,30 @@ export default function Twin(props: Props) {
   return (
     <div style={{ height: props.height ?? 520 }} className="relative w-full overflow-hidden rounded-xl" role="img"
       aria-label={`3D view of ${props.entities.length} components. ${props.entities.filter((e) => e.status === 'critical').length} critical, ${props.entities.filter((e) => e.status === 'warning').length} degraded.`}>
-      <Canvas camera={{ position: [0, 9, 13], fov: 42 }} dpr={[1, 2]} gl={{ antialias: true }}>
+      <Canvas camera={{ position: [0, 12, 11], fov: 40 }} dpr={[1, 2]} gl={{ antialias: true }}>
         <Scene {...props} colors={colors} reduced={reduced} />
       </Canvas>
+    </div>
+  );
+}
+
+/** Key for the twin. Shown wherever the twin is. */
+export function TwinLegend({ className, note, flow = true }: { className?: string; note?: string; flow?: boolean }) {
+  const items: [string, string][] = [
+    ['var(--brand)', 'Healthy'], ['var(--warning)', 'Degraded'], ['var(--critical)', 'Problem'],
+    ['var(--muted-foreground)', 'Not monitored'], ['var(--agent)', 'Agent'],
+  ];
+  return (
+    <div className={className ?? 'pointer-events-none absolute bottom-4 left-4 max-w-[calc(100%-2rem)] rounded-lg bg-background/75 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur'}>
+      <ul className="flex flex-wrap gap-x-3 gap-y-1">
+        {items.map(([c, l]) => (
+          <li key={l} className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: c }} />{l}</li>
+        ))}
+      </ul>
+      <p className="mt-1">
+        {flow ? 'Arrows show the direction data flows. Moving dots are live transactions; red dots were flagged as fraud. Hover a station for what it does; click it for its health checks.' : 'Arrows show the direction data flows.'}
+      </p>
+      {note && <p className="mt-1 text-warning">{note}</p>}
     </div>
   );
 }

@@ -70,7 +70,8 @@ export async function abnormalNow() {
 export async function system(systemId: string) {
   const [sys, entities, edges, incidents, agents, deploys] = await Promise.all([
     q(`SELECT * FROM ${CP}.SYSTEMS WHERE system_id = ?`, [systemId]),
-    q(`SELECT * EXCLUDE (latest_metrics), latest_metrics::VARIANT AS latest_metrics FROM ${CP}.V_ENTITY_HEALTH WHERE system_id = ?`, [systemId]),
+    q(`SELECT h.* EXCLUDE (latest_metrics), h.latest_metrics::VARIANT AS latest_metrics, e.config:subtitle::STRING AS subtitle
+       FROM ${CP}.V_ENTITY_HEALTH h LEFT JOIN ${CP}.ENTITIES e USING (entity_id) WHERE h.system_id = ?`, [systemId]),
     q(`SELECT from_id, to_id, relation, source FROM ${CP}.EDGES WHERE system_id = ?`, [systemId]),
     q(`SELECT * EXCLUDE (entities), entities::VARIANT AS entities FROM ${CP}.INCIDENTS WHERE system_id = ? AND (status = 'open' OR resolved_at >= DATEADD(hour, -12, CURRENT_TIMESTAMP()::TIMESTAMP_NTZ))
        ORDER BY opened_at DESC LIMIT 5`, [systemId]),
@@ -129,8 +130,12 @@ export async function incident(incidentId: string) {
     q(`SELECT * FROM ${CP}.V_HYPOTHESES WHERE incident_id = ? ORDER BY ts`, [incidentId]),
     q(`SELECT * FROM ${CP}.V_EXPERIMENTS WHERE incident_id = ? ORDER BY ts`, [incidentId]),
     q(`SELECT * FROM ${CP}.V_PROPOSALS WHERE incident_id = ? ORDER BY proposed_at`, [incidentId]),
-    q(`SELECT * FROM ${CP}.V_AGENT_RUNS WHERE incident_id = ? ORDER BY started_at DESC`, [incidentId]),
-    q(`SELECT entity_id, name, stage, entity_type FROM ${CP}.ENTITIES WHERE system_id = ?`, [sys]),
+    q(`SELECT r.*, p.body AS report, e.attributes:subject::STRING AS report_subject, e.attributes:summary::STRING AS report_summary
+       FROM ${CP}.V_AGENT_RUNS r LEFT JOIN ${CP}.AGENT_REPORTS p ON p.run_id = r.run_id
+       LEFT JOIN ${CP}.AGENT_EVENTS e ON e.run_id = r.run_id AND e.kind = 'report'
+       WHERE r.incident_id = ? QUALIFY ROW_NUMBER() OVER (PARTITION BY r.run_id ORDER BY e.seq DESC NULLS LAST) = 1
+       ORDER BY r.started_at DESC`, [incidentId]),
+    q(`SELECT entity_id, name, stage, entity_type, config:subtitle::STRING AS subtitle FROM ${CP}.ENTITIES WHERE system_id = ?`, [sys]),
   ]);
   return { incident: inc, signals: sigs, metrics, changes, hypotheses: hyps, experiments: exps, proposals, runs, entities };
 }
@@ -165,14 +170,16 @@ export async function agentRun(runId: string) {
        FROM ${CP}.V_AGENT_RUNS r JOIN ${CP}.AGENTS a USING (agent_id) WHERE r.run_id = ?`, [runId]),
     q(`SELECT * FROM ${CP}.V_PROPOSALS WHERE run_id = ? ORDER BY seq`, [runId]),
   ]);
+  const report = (await q(`SELECT body FROM ${CP}.AGENT_REPORTS WHERE run_id = ?`, [runId]))[0]?.body ?? null;
   const run = agent[0] ?? null;
   const topo = run
     ? await Promise.all([
-        q(`SELECT entity_id, name, stage, entity_type, status FROM ${CP}.V_ENTITY_HEALTH WHERE system_id = ?`, [run.system_id]),
+        q(`SELECT h.entity_id, h.name, h.stage, h.entity_type, h.status, e.config:subtitle::STRING AS subtitle
+            FROM ${CP}.V_ENTITY_HEALTH h LEFT JOIN ${CP}.ENTITIES e USING (entity_id) WHERE h.system_id = ?`, [run.system_id]),
         q(`SELECT from_id, to_id, relation FROM ${CP}.EDGES WHERE system_id = ?`, [run.system_id]),
       ])
     : [[], []];
-  return { run, events, proposals, entities: topo[0], edges: topo[1] };
+  return { run, events, proposals, report, entities: topo[0], edges: topo[1] };
 }
 
 export async function agents() {
@@ -180,26 +187,29 @@ export async function agents() {
 }
 
 export async function governance() {
-  const [log, accuracy, mttx, coverage, policy] = await Promise.all([
+  const [log, accuracy, mttx, coverage, policy, names] = await Promise.all([
     q(`SELECT * FROM ${CP}.ACTION_LOG ORDER BY ts DESC LIMIT 100`),
-    q(`SELECT system_id, COUNT(*) incidents, COUNT(agent_verdict) investigated, COUNT(human_verdict) reviewed,
+    q(`SELECT system_id, ANY_VALUE(s.name) system_name, COUNT(*) incidents, COUNT(agent_verdict) investigated, COUNT(human_verdict) reviewed,
               COUNT_IF(human_verdict = 'correct') correct, COUNT_IF(human_verdict = 'partially_correct') partial,
               COUNT_IF(human_verdict = 'wrong') wrong, COUNT_IF(human_verdict = 'not_an_incident') false_alarm
-       FROM ${CP}.INCIDENTS GROUP BY 1`),
-    q(`SELECT i.system_id, i.incident_id, i.opened_at, i.resolved_at,
+       FROM ${CP}.INCIDENTS LEFT JOIN ${CP}.SYSTEMS s USING (system_id) GROUP BY 1`),
+    q(`SELECT i.system_id, ANY_VALUE(s.name) system_name, i.incident_id, ANY_VALUE(i.title) title, i.opened_at, i.resolved_at,
               MIN(r.started_at) first_agent_at, MIN(IFF(l.outcome = 'executed' AND l.action LIKE 'approve:%', l.ts, NULL)) mitigated_at
-       FROM ${CP}.INCIDENTS i LEFT JOIN ${CP}.V_AGENT_RUNS r ON r.incident_id = i.incident_id
+       FROM ${CP}.INCIDENTS i LEFT JOIN ${CP}.SYSTEMS s USING (system_id) LEFT JOIN ${CP}.V_AGENT_RUNS r ON r.incident_id = i.incident_id
        LEFT JOIN ${CP}.ACTION_LOG l ON l.incident_id = i.incident_id
-       GROUP BY 1, 2, 3, 4 ORDER BY opened_at DESC LIMIT 50`),
-    q(`SELECT * EXCLUDE (gaps), gaps::VARIANT AS gaps FROM ${CP}.V_COVERAGE ORDER BY ARRAY_SIZE(gaps) DESC, system_id, stage`),
+       GROUP BY i.system_id, i.incident_id, i.opened_at, i.resolved_at ORDER BY i.opened_at DESC LIMIT 50`),
+    q(`SELECT c.* EXCLUDE (gaps), c.gaps::VARIANT AS gaps, s.name AS system_name FROM ${CP}.V_COVERAGE c LEFT JOIN ${CP}.SYSTEMS s USING (system_id)
+       ORDER BY ARRAY_SIZE(c.gaps) DESC, c.system_id, c.stage`),
     q(`SELECT * FROM ${CP}.ACTION_TYPES ORDER BY requires_approval DESC, action_type`),
+    q(`SELECT entity_id, name FROM ${CP}.ENTITIES UNION ALL SELECT agent_id, name FROM ${CP}.AGENTS`),
   ]);
-  return { log, accuracy, mttx, coverage, policy };
+  return { log, accuracy, mttx, coverage, policy, names };
 }
 
 export async function freshness() {
   const rows = await q(`SELECT CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS now_ts,
                           (SELECT MAX(evaluated_at) FROM ${CP}.SIGNALS) AS signals_at,
-                          (SELECT MAX(loaded_at) FROM ${CP}.AGENT_EVENTS) AS events_at`);
+                          (SELECT MAX(loaded_at) FROM ${CP}.AGENT_EVENTS) AS events_at,
+                          TO_CHAR(CURRENT_TIMESTAMP(), 'TZH:TZM') AS tz`);
   return rows[0];
 }

@@ -40,8 +40,8 @@ export function Explore({ templates }: { templates: { label: string; sql: string
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') run(); }}
         className="w-full rounded-md border border-input bg-background p-2.5 font-mono text-[12px] leading-relaxed" />
       <div className="flex items-center gap-3">
-        <Button size="sm" onClick={run} disabled={busy}>{busy ? 'Running…' : 'Run (⌘↵)'}</Button>
-        <span className="text-[11px] text-muted-foreground">Read-only · runs with your own privileges · max 500 rows</span>
+        <Button size="sm" onClick={run} disabled={busy}>{busy ? 'Running…' : 'Run query'}</Button>
+        <span className="text-[11px] text-muted-foreground">Read-only · uses your own access · up to 500 rows · Ctrl/⌘+Enter to run</span>
       </div>
       {err && <p className="text-xs text-critical" role="alert">{err}</p>}
       {rows && (

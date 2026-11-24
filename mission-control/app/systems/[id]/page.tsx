@@ -2,16 +2,16 @@
 
 import { SignalChart, type SignalPoint } from '@/components/signal-chart';
 import { ErrorState, StatusPill, VerdictBadge } from '@/components/status';
-import type { TwinEntity } from '@/components/twin/twin';
+import { TwinLegend, type TwinEntity } from '@/components/twin/twin';
 import { postJson, useApi } from '@/lib/client';
-import { fmtMetric, STAGE_LABEL, type Status } from '@/lib/status';
+import { fmtMetric, normalRange, plural, stepLabel, type Status } from '@/lib/status';
 import { ago, hhmm, ms } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { Bot, Siren, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 
 const Twin = dynamic(() => import('@/components/twin/twin'), {
   ssr: false,
@@ -55,7 +55,7 @@ function SystemInner() {
   };
 
   const twinEntities = useMemo<TwinEntity[]>(
-    () => (data?.entities ?? []).map((e) => ({ entity_id: e.entity_id, name: e.name, stage: e.stage, entity_type: e.entity_type, status: e.status as Status })),
+    () => (data?.entities ?? []).map((e) => ({ entity_id: e.entity_id, name: e.name, stage: e.stage, entity_type: e.entity_type, status: e.status as Status, subtitle: e.subtitle })),
     [data?.entities],
   );
 
@@ -67,11 +67,15 @@ function SystemInner() {
   const volume = Number(data.kpis.find((k) => k.golden_class === 'volume')?.value ?? 60);
   const flagShare = Number(data.kpis.find((k) => k.golden_class === 'output' && k.unit === 'share')?.value ?? 0.01);
   const critical = data.entities.filter((e) => e.status === 'critical');
+  const degraded = data.entities.filter((e) => e.status === 'warning');
+  const names = (xs: Row[]) => xs.map((c) => c.name).join(', ');
   const sentence = open
-    ? `${critical.length ? critical.map((c) => c.name).join(', ') : 'Signals'} abnormal since ${hhmm(open.opened_at)}`
-    : critical.length || data.entities.some((e) => e.status === 'warning')
-      ? 'Some components are outside their expected range'
-      : 'Every component is within its expected range';
+    ? `Problem in ${critical.length ? names(critical) : 'this system'} since ${hhmm(open.opened_at)}`
+    : critical.length
+      ? `Problem in ${names(critical)}`
+      : degraded.length
+        ? `${names(degraded)} ${degraded.length === 1 ? 'is' : 'are'} slightly outside normal`
+        : 'Everything is running normally';
 
   return (
     <div className="space-y-6">
@@ -80,10 +84,7 @@ function SystemInner() {
           <p className="text-sm text-muted-foreground"><Link href="/" className="hover:text-foreground">Fleet</Link> / {data.system.name}</p>
           <h1 className="mt-1 text-3xl font-semibold md:text-4xl">{sentence}</h1>
         </div>
-        <div className="text-right text-xs text-muted-foreground">
-          <p>Owner {data.system.owner}</p>
-          <p>Signals evaluated {ago(data.freshness.signals_at, now)}</p>
-        </div>
+        <p className="text-right text-xs text-muted-foreground">Owner {data.system.owner}</p>
       </div>
 
       <section className="relative animate-rise [animation-delay:60ms]" aria-label="System digital twin">
@@ -98,7 +99,7 @@ function SystemInner() {
               className="pointer-events-auto flex items-center gap-3 rounded-lg border border-critical/50 bg-background/85 px-4 py-2.5 backdrop-blur transition-colors hover:border-critical">
               <Siren className="h-4 w-4 text-critical" aria-hidden />
               <div className="text-sm">
-                <p className="font-medium">Incident open {ago(open.opened_at, now)}</p>
+                <p className="font-medium">Incident opened {ago(open.opened_at, now)}</p>
                 <p className="text-xs text-muted-foreground">{open.title}</p>
               </div>
               <VerdictBadge verdict={open.agent_verdict} />
@@ -109,52 +110,65 @@ function SystemInner() {
               className="pointer-events-auto flex items-center gap-3 rounded-lg border border-agent/50 bg-background/85 px-4 py-2.5 backdrop-blur">
               <Bot className="h-4 w-4 text-agent" aria-hidden />
               <div className="text-sm">
-                <p className="font-medium text-agent">{live.agent_name ?? 'Agent'} investigating</p>
+                <p className="font-medium text-agent">{live.agent_name ?? 'Agent'} is investigating</p>
                 <p className="max-w-md truncate text-xs text-muted-foreground">
-                  {lastStep ? `${lastStep.name}: ${lastStep.attributes?.result_summary ?? lastStep.attributes?.summary ?? ''}` : 'Starting…'}
+                  {lastStep ? stepLabel(lastStep.name) : 'Starting…'}
                 </p>
               </div>
             </Link>
           )}
         </div>
-        <Legend />
 
+        <TwinLegend className="mt-2 px-1 text-[11px] text-muted-foreground" />
         {selected && <NodeDrawer entity={data.entities.find((e) => e.entity_id === selected)} kpis={data.kpis} deploys={data.deploys}
           onClose={() => select(null)} />}
       </section>
 
-      <section aria-labelledby="signals" className="animate-rise [animation-delay:120ms]">
-        <h2 id="signals" className="mb-3 text-sm font-medium text-muted-foreground">Golden signals · latest 5-minute window</h2>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-3 xl:grid-cols-6">
-          {data.kpis.map((k) => (
-            <button key={k.metric_id} onClick={() => select(k.entity_id)}
-              className={cn('bg-card p-4 text-left transition-colors hover:bg-accent/60', k.is_abnormal && 'bg-critical/5')}>
-              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: k.is_abnormal ? 'var(--critical)' : k.value === null ? 'var(--muted-foreground)' : 'var(--brand)' }} aria-hidden />
-                <span className="truncate">{k.name}</span>
-              </p>
-              <p className={cn('tabular mt-2 font-display text-2xl leading-none', k.is_abnormal && 'text-critical')}>{fmtMetric(k.value, k.unit)}</p>
-              <p className="tabular mt-1.5 text-[11px] text-muted-foreground">
-                {k.value === null ? 'No recent data' : k.expected !== null
-                  ? `expected ${fmtMetric(k.expected_low, k.unit)}–${fmtMetric(k.expected_high, k.unit)}`
-                  : k.expected_high !== null ? `limit ${fmtMetric(k.expected_high, k.unit)}` : `minimum ${fmtMetric(k.expected_low, k.unit)}`}
-              </p>
-            </button>
-          ))}
-        </div>
-      </section>
+      <HealthChecks kpis={data.kpis} entities={data.entities} onSelect={select} />
     </div>
   );
 }
 
-function Legend() {
-  const items: [string, string][] = [['var(--brand)', 'Healthy flow'], ['var(--warning)', 'Degraded'], ['var(--critical)', 'Critical / flagged'], ['var(--agent)', 'Agent probe']];
+function HealthChecks({ kpis, entities, onSelect }: { kpis: Row[]; entities: Row[]; onSelect: (id: string) => void }) {
+  const [all, setAll] = useState(false);
+  const bad = kpis.filter((k) => k.is_abnormal);
+  const ok = kpis.filter((k) => !k.is_abnormal);
+  const shown = all ? [...bad, ...ok] : bad;
+  const name = (id: string) => entities.find((e) => e.entity_id === id)?.name ?? '';
   return (
-    <ul className="pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-3 rounded-lg bg-background/70 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur">
-      {items.map(([c, l]) => (
-        <li key={l} className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: c }} />{l}</li>
-      ))}
-    </ul>
+    <section aria-labelledby="checks" className="animate-rise [animation-delay:120ms]">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h2 id="checks" className="text-sm font-medium text-muted-foreground">
+          Health checks · {bad.length ? `${plural(bad.length, 'problem')}, ` : ''}{ok.length} normal · latest 5 minutes
+        </h2>
+        {ok.length > 0 && (
+          <button onClick={() => setAll(!all)} className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            {all ? 'Show problems only' : `Show all ${kpis.length}`}
+          </button>
+        )}
+      </div>
+      {shown.length === 0 ? (
+        <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">All {kpis.length} health checks are normal.</p>
+      ) : (
+        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 xl:grid-cols-4">
+          {shown.map((k) => (
+            <button key={k.metric_id} onClick={() => onSelect(k.entity_id)} title="Open this component"
+              className={cn('group bg-card p-4 text-left transition-colors hover:bg-accent/60', k.is_abnormal && 'bg-critical/5')}>
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{name(k.entity_id)}</p>
+              <p className="mt-0.5 flex items-center gap-1.5 text-sm">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: k.is_abnormal ? 'var(--critical)' : k.value === null ? 'var(--muted-foreground)' : 'var(--brand)' }} aria-hidden />
+                <span className="truncate">{k.name}</span>
+              </p>
+              <p className={cn('tabular mt-2 font-display text-2xl leading-none', k.is_abnormal && 'text-critical')}>{fmtMetric(k.value, k.unit)}</p>
+              <p className="tabular mt-1.5 flex justify-between text-[11px] text-muted-foreground">
+                <span>{k.value === null ? 'No recent data' : normalRange(k)}</span>
+                <span className="opacity-0 transition-opacity group-hover:opacity-100">Details ›</span>
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -169,9 +183,8 @@ function NodeDrawer({ entity, kpis, deploys, onClose }: { entity?: Row; kpis: Ro
       aria-label={`${entity.name} details`}>
       <div className="flex items-start justify-between gap-3 border-b border-border p-4">
         <div>
-          <p className="text-xs uppercase tracking-wider text-muted-foreground">{STAGE_LABEL[entity.stage] ?? entity.stage} · {entity.entity_type}</p>
-          <h3 className="mt-0.5 text-xl font-semibold">{entity.name}</h3>
-          <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{entity.fqn}</p>
+          <h3 className="text-xl font-semibold">{entity.name}</h3>
+          {entity.subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{entity.subtitle}</p>}
         </div>
         <button onClick={onClose} className="rounded-md p-1 hover:bg-accent" aria-label="Close details"><X className="h-4 w-4" /></button>
       </div>
@@ -179,11 +192,11 @@ function NodeDrawer({ entity, kpis, deploys, onClose }: { entity?: Row; kpis: Ro
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <StatusPill status={entity.status} />
           <span className="text-muted-foreground">Owner {entity.owner}</span>
-          {hook && <span className="text-muted-foreground">· deploys from {hook.branch}:{hook.path}</span>}
+          {hook && <span className="text-muted-foreground">· fixes deploy automatically</span>}
         </div>
         {metrics.length === 0 ? (
           <p className="rounded-lg border border-dashed border-warning/50 p-3 text-sm text-warning">
-            No monitors on this component. Agents can't detect problems that start here; add a metric to its catalog.
+            No health checks here, so problems that start in this component won\u2019t be detected.
           </p>
         ) : metrics.map((m) => (
           <div key={m.metric_id}>
@@ -191,11 +204,18 @@ function NodeDrawer({ entity, kpis, deploys, onClose }: { entity?: Row; kpis: Ro
               <p className="text-sm font-medium">{m.name}</p>
               <p className={cn('tabular text-sm', m.is_abnormal && 'text-critical')}>{fmtMetric(m.value, m.unit)}</p>
             </div>
-            <p className="text-xs text-muted-foreground">{m.description}</p>
+            <p className="text-xs text-muted-foreground">{m.description} · {normalRange(m)} · last 3 hours</p>
             <SignalChart label={m.name} unit={m.unit} height={110}
               points={(series.data?.rows ?? []).filter((r: Row) => r.metric_id === m.metric_id) as SignalPoint[]} />
           </div>
         ))}
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground">Technical details</summary>
+          <dl className="mt-2 space-y-1 break-all font-mono text-[11px]">
+            <div>{entity.fqn}</div>
+            {hook && <div>deploys from {hook.branch}:{hook.path}</div>}
+          </dl>
+        </details>
       </div>
     </aside>
   );

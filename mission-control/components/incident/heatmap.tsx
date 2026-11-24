@@ -16,7 +16,7 @@ export function Heatmap({ incidentId, openedAt, units }: { incidentId: string; o
   const { data, isPending, error } = useApi<{ rows: Cell[] }>(`/api/incidents/${incidentId}/heatmap`, 60000);
   const cursor = useCursor();
   if (isPending) return <div className="h-48 animate-pulse rounded-lg bg-muted/40" />;
-  if (error) return <p className="text-sm text-critical">Heatmap unavailable: {String((error as Error).message)}</p>;
+  if (error) return <p className="text-sm text-critical">Couldn&rsquo;t load this view: {String((error as Error).message)}</p>;
   const rows = data?.rows ?? [];
   const times = [...new Set(rows.map((r) => ms(r.ts)))].sort((a, b) => a - b);
   const metrics = [...new Map(rows.map((r) => [r.metric_id, r])).values()];
@@ -31,7 +31,7 @@ export function Heatmap({ incidentId, openedAt, units }: { incidentId: string; o
       <table className="w-full border-separate border-spacing-[2px] text-xs" aria-label="Signal deviation heatmap">
         <thead>
           <tr>
-            <th className="sticky left-0 bg-card pr-3 text-left font-normal text-muted-foreground">Metric (first to break on top)</th>
+            <th className="sticky left-0 bg-card pr-3 text-left font-normal text-muted-foreground">Health check</th>
             {times.map((t, i) => (
               <th key={t} className="w-4 font-normal text-muted-foreground">
                 {i % 6 === 0 ? <span className="tabular block -rotate-45 whitespace-nowrap text-[10px]">{hhmm(new Date(t).toISOString())}</span> : null}
@@ -50,7 +50,7 @@ export function Heatmap({ incidentId, openedAt, units }: { incidentId: string; o
                   ? `color-mix(in oklab, var(--critical) ${Math.round(35 + k * 60)}%, transparent)`
                   : `color-mix(in oklab, var(--brand) ${Math.round(8 + k * 60)}%, transparent)`;
                 return (
-                  <td key={t} title={c ? `${m.name} ${hhmm(c.ts)}: ${fmtMetric(c.value, units[m.metric_id])}${c.is_abnormal ? ' (abnormal)' : ''}` : 'no data'}
+                  <td key={t} title={c ? `${m.name} ${hhmm(c.ts)}: ${fmtMetric(c.value, units[m.metric_id])}${c.is_abnormal ? ' (outside normal)' : ''}` : 'no data'}
                     onMouseEnter={() => cursor.set(t)} onMouseLeave={() => cursor.set(null)}
                     className="h-5 min-w-3 rounded-[3px]"
                     style={{ background: bg, outline: cursor.ts === t ? '1px solid var(--foreground)' : t === opened ? '1px dashed var(--critical)' : undefined }} />
@@ -60,6 +60,11 @@ export function Heatmap({ incidentId, openedAt, units }: { incidentId: string; o
           ))}
         </tbody>
       </table>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-[3px]" style={{ background: 'color-mix(in oklab, var(--brand) 30%, transparent)' }} />Normal</span>
+        <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-[3px]" style={{ background: 'color-mix(in oklab, var(--critical) 80%, transparent)' }} />Outside normal (darker = further off)</span>
+        <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-[3px]" style={{ outline: '1px dashed var(--critical)' }} />Incident start</span>
+      </div>
     </div>
   );
 }

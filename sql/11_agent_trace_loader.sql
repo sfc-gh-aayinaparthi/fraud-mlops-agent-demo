@@ -9,6 +9,13 @@ USE WAREHOUSE FRAUD_WH;
 CREATE FILE FORMAT IF NOT EXISTS FF_LINES TYPE = CSV FIELD_DELIMITER = NONE RECORD_DELIMITER = '\n'
   ESCAPE_UNENCLOSED_FIELD = NONE;
 CREATE STAGE IF NOT EXISTS AGENT_TRACES DIRECTORY = (ENABLE = TRUE);
+-- Whole-file reader for markdown reports (no record or field splitting)
+CREATE FILE FORMAT IF NOT EXISTS FF_WHOLE TYPE = CSV FIELD_DELIMITER = NONE RECORD_DELIMITER = NONE
+  ESCAPE_UNENCLOSED_FIELD = NONE;
+CREATE TABLE IF NOT EXISTS AGENT_REPORTS (
+  agent_id STRING, run_id STRING, body STRING, source_file STRING,
+  loaded_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()::TIMESTAMP_NTZ);
+GRANT SELECT ON TABLE AGENT_REPORTS TO ROLE MLOPS_UI_RO;
 
 CREATE OR REPLACE PROCEDURE LOAD_AGENT_EVENTS()
 RETURNS STRING
@@ -47,6 +54,20 @@ BEGIN
           s.j:kind::STRING, s.j:name::STRING, s.j:status::STRING, s.j:entity_id::STRING,
           s.j:incident_id::STRING, s.j:attributes, s.f);
   n := SQLROWCOUNT;
+
+  -- Full run reports: one markdown file per run, <run_id>.report.md, read whole
+  MERGE INTO MLOPS_CONTROL.CORE.AGENT_REPORTS t
+  USING (
+    SELECT SPLIT_PART(METADATA$FILENAME, '/', 1) AS agent_id,
+           REGEXP_SUBSTR(METADATA$FILENAME, '([^/]+)\\.report\\.md$', 1, 1, 'e') AS run_id,
+           $1 AS body, METADATA$FILENAME AS f
+    FROM @MLOPS_CONTROL.CORE.AGENT_TRACES (FILE_FORMAT => 'MLOPS_CONTROL.CORE.FF_WHOLE', PATTERN => '.*\\.report\\.md')
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY f) = 1
+  ) s
+  ON t.run_id = s.run_id
+  WHEN MATCHED AND t.body <> s.body THEN UPDATE SET body = s.body, loaded_at = CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
+  WHEN NOT MATCHED AND s.run_id IS NOT NULL THEN INSERT (agent_id, run_id, body, source_file)
+    VALUES (s.agent_id, s.run_id, s.body, s.f);
   RETURN 'loaded ' || n || ' events';
 END;
 $$;
