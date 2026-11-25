@@ -5,8 +5,8 @@
 -- Transaction-level inputs (amount, card velocity, new-merchant flag, hour, channel, and the
 -- amount-vs-usual-spend ratio and distance-from-home that combine views) are computed at
 -- scoring time by FEATURES.FEATURE_SET_SQL.
--- VERSION: v2
--- USES: CARD_SPEND_PROFILE/V1, CUSTOMER_PROFILE/V1, MERCHANT_PROFILE/V1, CARD_PROFILE/V1
+-- VERSION: v1
+-- USES: CUSTOMER_SPEND/V1, CUSTOMER_PROFILE/V1, MERCHANT_PROFILE/V1, CARD_PROFILE/V1
 
 -- @feature_view CUSTOMER_SPEND/V1 entity=CUSTOMER timestamp=SPEND_TS
 -- desc: Customer's average spend over the previous 30 days, as of each of their transactions
@@ -30,9 +30,3 @@ FROM FRAUD_AUTOML_DEMO.RAW.MERCHANTS;
 -- desc: Card issuing platform and issue date
 SELECT card_id, issuing_platform, issued_dt AS card_issued_dt
 FROM FRAUD_AUTOML_DEMO.RAW.CARDS;
-
--- @feature_view CARD_SPEND_PROFILE/V1 entity=CARD
--- desc: Precomputed 30-day spend per card from the new customer-profile platform
--- perf: replaces the 30-day window scan over transactions
-SELECT card_id, avg_amt_30d::FLOAT AS cust_avg_amt_30d
-FROM FRAUD_AUTOML_DEMO.RAW.CUSTOMER_PROFILE_V2;
