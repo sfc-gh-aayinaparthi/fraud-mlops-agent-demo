@@ -16,7 +16,7 @@ const NAV = [
   { href: '/governance', label: 'Governance', icon: ShieldCheck, match: (p: string) => p.startsWith('/governance') },
 ];
 
-type Fresh = { freshness?: { now_ts: string; signals_at: string; events_at: string } };
+type Fresh = { freshness?: { now_ts: string; signals_at: string; events_at: string; tz?: string } };
 type Me = { user: string | null; approver: boolean; identity: 'caller' | 'dev' };
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -54,14 +54,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
           <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
             {f && (
-              <span className={cn('hidden items-center gap-1.5 md:flex', stale && 'text-warning')} title="When the control plane last evaluated signals">
+              <span className={cn('hidden items-center gap-1.5 md:flex', stale && 'text-warning')} title="Health checks run every 5 minutes">
                 <span className={cn('h-1.5 w-1.5 rounded-full', stale ? 'bg-warning' : 'bg-brand')} />
-                Signals {ago(f.signals_at, f.now_ts)}
-                {stale && ' (stale)'}
+                Checked {ago(f.signals_at, f.now_ts)}
+                {stale && ' (overdue)'}
               </span>
             )}
+            {f?.tz && <span className="hidden lg:inline" title="All times on this site use this time zone">Times UTC{f.tz}</span>}
             {me.data?.user && (
-              <span className="hidden items-center gap-1.5 lg:flex" title={me.data.identity === 'dev' ? 'Local dev: actions run as the developer connection' : 'Signed-in Snowflake user'}>
+              <span className="hidden items-center gap-1.5 lg:flex" title={me.data.approver ? 'You can approve fixes and start agent runs' : 'You can view everything; approvers take actions'}>
                 {me.data.user}
                 <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', me.data.approver ? 'bg-agent/15 text-agent' : 'bg-muted')}>
                   {me.data.approver ? 'Approver' : 'Viewer'}

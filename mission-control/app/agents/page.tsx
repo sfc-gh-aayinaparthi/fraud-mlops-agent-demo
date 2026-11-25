@@ -3,6 +3,7 @@
 import { EmptyState, ErrorState, VerdictBadge } from '@/components/status';
 import { Button } from '@/components/ui/button';
 import { postJson, useApi } from '@/lib/client';
+import { plural, triggerLabel } from '@/lib/status';
 import { ago, dayTime, minutesBetween, ms } from '@/lib/time';
 import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Lock, Play, ShieldCheck } from 'lucide-react';
@@ -25,8 +26,8 @@ export default function AgentsPage() {
   return (
     <div className="space-y-10">
       <div className="animate-rise">
-        <p className="text-sm text-muted-foreground">Agents · autonomous investigators with read-only access and approval-gated actions</p>
-        <h1 className="mt-1 text-4xl font-semibold">{live.length ? `${live.length} agent${live.length > 1 ? 's' : ''} investigating now` : 'No agent is running right now'}</h1>
+        <p className="text-sm text-muted-foreground">Agents · investigate incidents on their own; a person approves every fix</p>
+        <h1 className="mt-1 text-4xl font-semibold">{live.length ? `${plural(live.length, 'agent')} investigating now` : 'No agent is running right now'}</h1>
       </div>
 
       <section aria-labelledby="agents-h" className="grid gap-4 md:grid-cols-2">
@@ -37,7 +38,7 @@ export default function AgentsPage() {
       </section>
 
       <section aria-labelledby="runs-h">
-        <h2 id="runs-h" className="mb-3 text-sm font-medium text-muted-foreground">Flight recorder · every run, replayable</h2>
+        <h2 id="runs-h" className="mb-3 text-sm font-medium text-muted-foreground">Run history · click a run to replay it step by step</h2>
         {data.runs.length === 0 ? <EmptyState title="No runs recorded yet" /> : (
           <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full text-sm">
@@ -45,13 +46,11 @@ export default function AgentsPage() {
                 <tr className="border-b border-border">
                   <th className="px-4 py-2.5 font-medium">Started</th>
                   <th className="px-4 py-2.5 font-medium">Agent</th>
-                  <th className="px-4 py-2.5 font-medium">Trigger</th>
-                  <th className="px-4 py-2.5 font-medium">Verdict</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Tools</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Experiments</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Proposals</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Duration</th>
-                  <th className="px-4 py-2.5 font-medium">Outcome</th>
+                  <th className="px-4 py-2.5 font-medium">Why it ran</th>
+                  <th className="px-4 py-2.5 font-medium">Result</th>
+                  <th className="px-4 py-2.5 text-right font-medium">What-if tests</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Took</th>
+                  <th className="px-4 py-2.5 font-medium">Fix proposed</th>
                 </tr>
               </thead>
               <tbody>
@@ -61,13 +60,11 @@ export default function AgentsPage() {
                       <Link href={`/agents/runs/${encodeURIComponent(r.run_id)}`} className="hover:text-brand">{dayTime(r.started_at)}</Link>
                     </td>
                     <td className="px-4 py-2.5">{r.agent_name}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{r.trigger_type ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{triggerLabel(r.trigger_type)}</td>
                     <td className="px-4 py-2.5">{r.ended_at ? <VerdictBadge verdict={r.verdict} /> : <span className="text-xs font-medium text-agent">Running</span>}</td>
-                    <td className="tabular px-4 py-2.5 text-right">{r.tool_calls}</td>
                     <td className="tabular px-4 py-2.5 text-right">{r.experiments}</td>
-                    <td className="tabular px-4 py-2.5 text-right">{r.proposals}</td>
                     <td className="tabular px-4 py-2.5 text-right">{minutesBetween(r.started_at, r.ended_at ?? r.last_event_at)} min</td>
-                    <td className="max-w-[22rem] truncate px-4 py-2.5 text-xs text-muted-foreground" title={r.status_line}>{r.status_line ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{Number(r.proposals) > 0 ? 'Yes' : 'No'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -114,10 +111,14 @@ function AgentCard({ agent, runs, now, approver }: { agent: Row; runs: Row[]; no
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
         <div><dt className="text-muted-foreground">System</dt><dd className="mt-0.5">{agent.system_name}</dd></div>
-        <div><dt className="text-muted-foreground">Last run</dt><dd className="mt-0.5">{last ? ago(last.started_at, now) : 'never'}</dd></div>
+        <div><dt className="text-muted-foreground">Last run</dt><dd className="mt-0.5">{last ? ago(last.started_at, now) : 'Never'}</dd></div>
         <div className="col-span-2">
-          <dt className="flex items-center gap-1 text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5" /> Guardrails</dt>
-          <dd className="mt-0.5">Session scope <span className="font-mono">{agent.restricted_scope}</span>: read-only SQL plus the counterfactual procedure. Writes only through pull requests; merges need a human approver.</dd>
+          <dt className="flex items-center gap-1 text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5" /> What it&rsquo;s allowed to do</dt>
+          <dd className="mt-1"><ul className="space-y-1 text-xs">
+            <li>Reads data only; it can&rsquo;t change anything in Snowflake.</li>
+            <li>Can run what-if tests to prove a cause.</li>
+            <li>Proposes fixes as code changes; a person must approve before anything changes.</li>
+          </ul></dd>
         </div>
       </dl>
       <div className="mt-4 flex items-center gap-3">
@@ -127,10 +128,10 @@ function AgentCard({ agent, runs, now, approver }: { agent: Row; runs: Row[]; no
               setErr(null);
               try { await postJson('/api/agents/run', { agent_id: agent.agent_id }); setRequested(ms(now)); } catch (e) { setErr((e as Error).message); }
             }}>
-            <Play className="h-3.5 w-3.5" /> {requested ? 'Starting… waiting for first trace event' : 'Run now'}
+            <Play className="h-3.5 w-3.5" /> {requested ? 'Starting… the run opens in about a minute' : 'Run now'}
           </Button>
         ) : (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Lock className="h-3.5 w-3.5" /> MLOPS_APPROVER can start runs</span>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Lock className="h-3.5 w-3.5" /> Approvers can start runs</span>
         )}
         {err && <span className="text-xs text-critical">{err}</span>}
       </div>

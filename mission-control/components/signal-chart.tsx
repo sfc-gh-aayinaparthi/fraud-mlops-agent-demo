@@ -42,6 +42,11 @@ export function SignalChart({ points, unit, markers = [], window, height = 150, 
   if (loading) return <div className="animate-pulse rounded-md bg-muted/40" style={{ height }} />;
   if (!data.length) return <div className="grid h-24 place-items-center text-xs text-muted-foreground">No data in this window</div>;
   const abnormal = points.filter((p) => p.is_abnormal).length;
+  // keep only markers inside the plotted range; drop labels that would collide with the previous one
+  const t0 = data[0].t, t1 = data[data.length - 1].t, gap = (t1 - t0) * 0.09;
+  let lastLabelled = -Infinity;
+  const shown = markers.map((m) => ({ ...m, t: ms(m.ts) })).filter((m) => m.t >= t0 && m.t <= t1).sort((a, b) => a.t - b.t)
+    .map((m) => { const keep = m.t - lastLabelled > gap; if (keep) lastLabelled = m.t; return { ...m, label: keep ? m.label : '' }; });
   return (
     <figure aria-label={`${label}: ${points.length} points, ${abnormal} abnormal`}>
       <ResponsiveContainer width="100%" height={height}>
@@ -51,13 +56,13 @@ export function SignalChart({ points, unit, markers = [], window, height = 150, 
           <XAxis dataKey="t" type="number" scale="time" domain={['dataMin', 'dataMax']} tickFormatter={(t) => hhmm(new Date(t).toISOString())}
             tick={CHART_THEME.tick} axisLine={false} tickLine={false} minTickGap={40} />
           <YAxis tickFormatter={(v) => fmtMetric(v, unit)} tick={CHART_THEME.tick} axisLine={false} tickLine={false} width={56} domain={['auto', 'auto']} />
-          {window && <ReferenceArea x1={ms(window[0])} x2={ms(window[1])} fill="var(--critical)" fillOpacity={0.07} ifOverflow="extendDomain" />}
+          {window && <ReferenceArea x1={ms(window[0])} x2={ms(window[1])} fill="var(--critical)" fillOpacity={0.07} ifOverflow="hidden" />}
           <Area dataKey="band" stroke="none" fill="var(--brand)" fillOpacity={0.12} isAnimationActive={false} />
           <Line dataKey="exp" stroke="var(--brand)" strokeOpacity={0.5} strokeDasharray="3 4" dot={false} isAnimationActive={false} />
           <Line dataKey="v" stroke="var(--foreground)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
           <Scatter dataKey="bad" fill="var(--critical)" isAnimationActive={false} />
-          {markers.map((m, i) => (
-            <ReferenceLine key={i} x={ms(m.ts)} stroke={TONE[m.tone ?? 'change']} strokeDasharray="2 3" ifOverflow="extendDomain"
+          {shown.map((m, i) => (
+            <ReferenceLine key={i} x={m.t} stroke={TONE[m.tone ?? 'change']} strokeDasharray="2 3" ifOverflow="discard"
               label={{ value: m.label, position: 'insideTopLeft', fill: TONE[m.tone ?? 'change'], fontSize: 10 }} />
           ))}
           {cursor.ts && <ReferenceLine x={cursor.ts} stroke="var(--muted-foreground)" strokeOpacity={0.6} />}
@@ -69,8 +74,8 @@ export function SignalChart({ points, unit, markers = [], window, height = 150, 
               return (
                 <div className="rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs shadow-lg">
                   <div className="text-muted-foreground">{hhmm(new Date(d.t).toISOString())}</div>
-                  <div className="tabular font-medium">{fmtMetric(d.v, unit)}{d.bad !== null && <span className="ml-1.5 text-critical">abnormal</span>}</div>
-                  {d.band && <div className="tabular text-muted-foreground">expected {fmtMetric(d.band[0], unit)} – {fmtMetric(d.band[1], unit)}</div>}
+                  <div className="tabular font-medium">{fmtMetric(d.v, unit)}{d.bad !== null && <span className="ml-1.5 text-critical">outside normal</span>}</div>
+                  {d.band && <div className="tabular text-muted-foreground">normally {fmtMetric(d.band[0], unit)}–{fmtMetric(d.band[1], unit)}</div>}
                 </div>
               );
             }}
